@@ -5,5 +5,7 @@
  */
 
 pub use cyclic::Cyclic;
+pub use traits::{Field, Module, Ring};
 
 mod cyclic;
+mod traits;
