@@ -224,8 +224,22 @@ mod tests {
     #[test]
     fn inversion() {
         assert_eq!(Cyclic::<2>::from(1).invert(), Cyclic::<2>::from(1));
+        assert_eq!(
+            Cyclic::<2>::from(1) * Cyclic::<2>::from(1).invert(),
+            Cyclic::<2>::from(1)
+        );
+
         assert_eq!(Cyclic::<5>::from(3).invert(), Cyclic::<5>::from(2));
+        assert_eq!(
+            Cyclic::<5>::from(3) * Cyclic::<5>::from(3).invert(),
+            Cyclic::<5>::from(1)
+        );
+
         assert_eq!(Cyclic::<541>::from(327).invert(), Cyclic::<541>::from(316));
+        assert_eq!(
+            Cyclic::<541>::from(327) * Cyclic::<541>::from(327).invert(),
+            Cyclic::<541>::from(1)
+        );
     }
 
     #[test]
