@@ -2,5 +2,10 @@
 name = "chomp3rs"
 version = "0.1.0"
 edition = "2024"
+description = "Computational Homology Project 3"
+readme = "README.md"
+license = "MPL-2.0"
+keywords = ["homology", "topology", "dynamical systems"]
+categories = ["mathematics"]
 
 [dependencies]
