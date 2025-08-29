@@ -9,3 +9,4 @@ keywords = ["homology", "topology", "dynamical systems"]
 categories = ["mathematics"]
 
 [dependencies]
+flint-sys = "0.7.3"

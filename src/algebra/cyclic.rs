@@ -6,12 +6,13 @@
 
 use crate::algebra::traits::{FieldLike, RingLike};
 
+use flint_sys::nmod_vec::{nmod_add, nmod_init, nmod_inv, nmod_mul, nmod_neg, nmod_sub, nmod_t};
+
 use std::convert::From;
 use std::fmt::{Display, Error, Formatter};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-/// The field of integers modulo `MOD`, for prime modulus values between 2 and 65521 (representable
-/// in 16 bits).
+/// The field of integers modulo `MOD`, for prime modulus values `MOD`.
 ///
 /// # Important Note
 /// `MOD` **must** be a prime number for the `FieldLike` implementation to be mathematically
@@ -28,44 +29,53 @@ use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 /// assert_eq!(Cyclic::<5>::from(8), Cyclic::<5>::from(3));
 /// assert_ne!(Cyclic::<7>::from(8), Cyclic::<7>::from(3));
 /// ```
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct Cyclic<const MOD: u32> {
-    remainder: u32,
+#[derive(Copy, Clone, Debug)]
+pub struct Cyclic<const MOD: u64> {
+    remainder: u64,
+    modulus: nmod_t,
 }
 
-impl<const MOD: u32> Cyclic<MOD> {
-    fn new_unchecked(value: u32) -> Self {
-        Self { remainder: value }
-    }
-}
-
-impl<const MOD: u32> From<u32> for Cyclic<MOD> {
-    fn from(value: u32) -> Self {
+impl<const MOD: u64> Cyclic<MOD> {
+    /// Create a new `Cyclic` instance with the given value modulo `MOD`. Panics if `MOD` is less
+    /// than 2; `MOD` is expected to be a prime number, though this is not explicitly checked.
+    pub fn new(value: u64) -> Self {
         assert!(
             MOD > 1,
             "modulus values must be a prime number greater than or equal to 2"
         );
-        assert!(
-            MOD <= u32::MAX / MOD,
-            "modulus values must be a prime number no greater than 65536"
-        );
+
+        let mut modulus = nmod_t {
+            n: 0,
+            ninv: 0,
+            norm: 0,
+        };
+        unsafe {
+            nmod_init(&mut modulus, MOD);
+        }
 
         Self {
             remainder: value % MOD,
+            modulus,
         }
     }
 }
 
-impl<const MOD: u32> RingLike for Cyclic<MOD> {
-    fn zero() -> Self {
-        Self { remainder: 0 }
-    }
-    fn one() -> Self {
-        Self { remainder: 1 }
+impl<const MOD: u64> From<u64> for Cyclic<MOD> {
+    fn from(value: u64) -> Self {
+        Self::new(value)
     }
 }
 
-impl<const MOD: u32> FieldLike for Cyclic<MOD> {
+impl<const MOD: u64> RingLike for Cyclic<MOD> {
+    fn zero() -> Self {
+        Self::new(0)
+    }
+    fn one() -> Self {
+        Self::new(1)
+    }
+}
+
+impl<const MOD: u64> FieldLike for Cyclic<MOD> {
     fn invert(&self) -> Self {
         assert!(
             self.remainder != 0,
@@ -75,91 +85,88 @@ impl<const MOD: u32> FieldLike for Cyclic<MOD> {
             return *self;
         }
 
-        // Based on Euler's theorem and the assumption that MOD is prime. In this case, the inverse
-        // of self is self to the power of (MOD - 2) (mod MOD).
-        // This code is inefficient and may need to be reworked if this method is used in time-
-        // critical code.
-        let mut inverse = *self;
-        for _ in 0..(MOD - 3) {
-            inverse *= *self;
+        Self {
+            remainder: unsafe { nmod_inv(self.remainder, self.modulus) },
+            modulus: self.modulus,
         }
-        inverse
     }
 }
 
-impl<const MOD: u32> Display for Cyclic<MOD> {
+impl<const MOD: u64> Display for Cyclic<MOD> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "{} (mod {})", self.remainder, MOD)
     }
 }
 
-impl<const MOD: u32> Neg for Cyclic<MOD> {
+impl<const MOD: u64> Neg for Cyclic<MOD> {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
-        match self.remainder {
-            0u32 => self,
-            _ => Self::new_unchecked(MOD - self.remainder),
+        Self {
+            remainder: unsafe { nmod_neg(self.remainder, self.modulus) },
+            modulus: self.modulus,
         }
     }
 }
 
-impl<const MOD: u32> AddAssign for Cyclic<MOD> {
+impl<const MOD: u64> AddAssign for Cyclic<MOD> {
     fn add_assign(&mut self, rhs: Self) {
-        self.remainder += rhs.remainder;
-        if self.remainder >= MOD {
-            self.remainder -= MOD;
-        }
+        self.remainder = unsafe { nmod_add(self.remainder, rhs.remainder, self.modulus) };
     }
 }
 
-impl<const MOD: u32> Add for Cyclic<MOD> {
+impl<const MOD: u64> Add for Cyclic<MOD> {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        let mut elem = self;
-        elem += rhs;
-        elem
-    }
-}
-
-impl<const MOD: u32> SubAssign for Cyclic<MOD> {
-    fn sub_assign(&mut self, rhs: Self) {
-        if self.remainder >= rhs.remainder {
-            self.remainder -= rhs.remainder;
-        } else {
-            self.remainder += MOD - rhs.remainder;
+        Self {
+            remainder: unsafe { nmod_add(self.remainder, rhs.remainder, self.modulus) },
+            modulus: self.modulus,
         }
     }
 }
 
-impl<const MOD: u32> Sub for Cyclic<MOD> {
+impl<const MOD: u64> SubAssign for Cyclic<MOD> {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.remainder = unsafe { nmod_sub(self.remainder, rhs.remainder, self.modulus) };
+    }
+}
+
+impl<const MOD: u64> Sub for Cyclic<MOD> {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        let mut elem = self;
-        elem -= rhs;
-        elem
+        Self {
+            remainder: unsafe { nmod_sub(self.remainder, rhs.remainder, self.modulus) },
+            modulus: self.modulus,
+        }
     }
 }
 
-impl<const MOD: u32> MulAssign for Cyclic<MOD> {
+impl<const MOD: u64> MulAssign for Cyclic<MOD> {
     fn mul_assign(&mut self, rhs: Self) {
-        // MOD is required to satisfy MOD * MOD <= u32::MAX by Cyclic::from
-        self.remainder *= rhs.remainder;
-        self.remainder %= MOD;
+        self.remainder = unsafe { nmod_mul(self.remainder, rhs.remainder, self.modulus) };
     }
 }
 
-impl<const MOD: u32> Mul for Cyclic<MOD> {
+impl<const MOD: u64> Mul for Cyclic<MOD> {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        let mut elem = self;
-        elem *= rhs;
-        elem
+        Self {
+            remainder: unsafe { nmod_mul(self.remainder, rhs.remainder, self.modulus) },
+            modulus: self.modulus,
+        }
     }
 }
+
+impl<const MOD: u64> PartialEq for Cyclic<MOD> {
+    fn eq(&self, other: &Self) -> bool {
+        self.remainder == other.remainder
+    }
+}
+
+impl<const MOD: u64> Eq for Cyclic<MOD> {}
 
 #[cfg(test)]
 mod tests {
@@ -175,12 +182,6 @@ mod tests {
     #[should_panic(expected = "modulus values must be a prime number greater than or equal to 2")]
     fn modulus_too_low() {
         let _a = Cyclic::<1>::from(0);
-    }
-
-    #[test]
-    #[should_panic(expected = "modulus values must be a prime number no greater than 65536")]
-    fn modulus_too_high() {
-        let _a = Cyclic::<65537>::from(0);
     }
 
     #[test]
@@ -265,6 +266,22 @@ mod tests {
     #[should_panic(expected = "attempting to invert equivalency class zero")]
     fn attempt_zero_inversion() {
         Cyclic::<17>::from(0).invert();
+    }
+
+    #[test]
+    fn handle_overflow_and_underflow() {
+        assert_eq!(
+            Cyclic::<7>::from(u64::MAX - 3) + Cyclic::<7>::from(5),
+            Cyclic::<7>::from(3)
+        );
+        assert_eq!(
+            Cyclic::<5>::from(u64::MAX - 4) * Cyclic::<5>::from(2),
+            Cyclic::<5>::from(2)
+        );
+        assert_eq!(
+            Cyclic::<3>::from(1) - Cyclic::<3>::from(18),
+            Cyclic::<3>::from(1)
+        );
     }
 
     #[test]
