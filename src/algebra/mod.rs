@@ -3,7 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub use cyclic::Cyclic;
-pub use traits::{Field, Module, Ring};
+pub use module::HashMapModule;
+pub use traits::{Additive, AlgebraicBase, Field, Module, Multiplicative, Ring};
 
 mod cyclic;
+mod module;
 mod traits;

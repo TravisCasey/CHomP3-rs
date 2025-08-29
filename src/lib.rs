@@ -5,6 +5,10 @@
 //! The `chomp3rs` crate provides efficient and optimized algorithms for high-dimensional
 //! computation of homology. The project is currently in an early developmental state.
 
-pub use crate::algebra::{Cyclic, Field, Module, Ring};
+#![warn(missing_docs)]
+
+pub use crate::algebra::{
+    Additive, AlgebraicBase, Cyclic, Field, HashMapModule, Module, Multiplicative, Ring,
+};
 
 mod algebra;

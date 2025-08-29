@@ -11,9 +11,15 @@ use std::fmt::{Display, Error, Formatter};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 /// The field of integers modulo `MOD`, for prime modulus values between 2 and 65521 (representable
-/// in 16 bits). `MOD` is not explicitly checked to be prime, but the implementation of `invert` and
-/// other dependent methods may assume this. Overflow and underflow are handled by the
-/// implementation.
+/// in 16 bits).
+///
+/// # Important Note
+/// `MOD` **must** be a prime number for the `Field` implementation to be mathematically correct.
+/// While this is not explicitly checked at compile time, the implementation of `invert` and
+/// other dependent methods assume this property. Using a composite modulus may lead to incorrect
+/// results or panics.
+///
+/// Overflow and underflow are handled by the implementation.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Cyclic<const MOD: u32> {
     remainder: u32,
@@ -42,7 +48,14 @@ impl<const MOD: u32> From<u32> for Cyclic<MOD> {
     }
 }
 
-impl<const MOD: u32> Ring for Cyclic<MOD> {}
+impl<const MOD: u32> Ring for Cyclic<MOD> {
+    fn zero() -> Self {
+        Self { remainder: 0 }
+    }
+    fn one() -> Self {
+        Self { remainder: 1 }
+    }
+}
 
 impl<const MOD: u32> Field for Cyclic<MOD> {
     fn invert(&self) -> Self {
