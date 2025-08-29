@@ -8,7 +8,9 @@
 #![warn(missing_docs)]
 
 pub use crate::algebra::{
-    Additive, AlgebraicBase, Cyclic, Field, HashMapModule, Module, Multiplicative, Ring,
+    Additive, AlgebraicBase, Cyclic, FieldLike, HashMapModule, ModuleLike, Multiplicative, RingLike,
 };
+pub use crate::complexes::{CellComplex, ComplexLike};
 
 mod algebra;
+mod complexes;
