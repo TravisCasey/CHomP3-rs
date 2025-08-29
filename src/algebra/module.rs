@@ -89,7 +89,7 @@ impl<C, R, H: Default> HashMapModule<C, R, H> {
     }
 }
 
-impl<C: Clone + Debug + Eq + Hash, R: Ring, H: BuildHasher + Debug + Default + Clone> Module<C, R>
+impl<C: Clone + Eq + Hash, R: Ring, H: BuildHasher + Default + Clone> Module<C, R>
     for HashMapModule<C, R, H>
 {
     fn new() -> Self {
