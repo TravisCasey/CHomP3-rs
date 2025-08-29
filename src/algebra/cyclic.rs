@@ -4,7 +4,7 @@
 
 //! The `Cyclic` class implementing the cyclic field of integers with configurable modulus.
 
-use crate::algebra::traits::{Field, Ring};
+use crate::algebra::traits::{FieldLike, RingLike};
 
 use std::convert::From;
 use std::fmt::{Display, Error, Formatter};
@@ -14,12 +14,20 @@ use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 /// in 16 bits).
 ///
 /// # Important Note
-/// `MOD` **must** be a prime number for the `Field` implementation to be mathematically correct.
-/// While this is not explicitly checked at compile time, the implementation of `invert` and
-/// other dependent methods assume this property. Using a composite modulus may lead to incorrect
-/// results or panics.
+/// `MOD` **must** be a prime number for the `FieldLike` implementation to be mathematically
+/// correct. While this is not explicitly checked at compile time, the implementation of `invert`
+/// and other dependent methods assume this property. Using a composite modulus may lead to
+/// incorrect results or panics.
 ///
 /// Overflow and underflow are handled by the implementation.
+///
+/// # Examples
+/// ## Equality Modulo `MOD`
+/// ```rust
+/// use chomp3rs::Cyclic;
+/// assert_eq!(Cyclic::<5>::from(8), Cyclic::<5>::from(3));
+/// assert_ne!(Cyclic::<7>::from(8), Cyclic::<7>::from(3));
+/// ```
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Cyclic<const MOD: u32> {
     remainder: u32,
@@ -48,7 +56,7 @@ impl<const MOD: u32> From<u32> for Cyclic<MOD> {
     }
 }
 
-impl<const MOD: u32> Ring for Cyclic<MOD> {
+impl<const MOD: u32> RingLike for Cyclic<MOD> {
     fn zero() -> Self {
         Self { remainder: 0 }
     }
@@ -57,7 +65,7 @@ impl<const MOD: u32> Ring for Cyclic<MOD> {
     }
 }
 
-impl<const MOD: u32> Field for Cyclic<MOD> {
+impl<const MOD: u32> FieldLike for Cyclic<MOD> {
     fn invert(&self) -> Self {
         assert!(
             self.remainder != 0,

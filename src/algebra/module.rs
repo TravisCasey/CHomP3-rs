@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{Module, Ring};
+use crate::{ModuleLike, RingLike};
 
 use std::collections::HashMap;
 use std::convert::From;
@@ -13,7 +13,7 @@ use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
 /// HashMap-based implementation of algebraic modules.
 ///
-/// This module provides [`HashMapModule`], a concrete implementation of the [`Module`] trait
+/// This module provides [`HashMapModule`], a concrete implementation of the [`ModuleLike`] trait
 /// using [`std::collections::HashMap`] as the underlying storage mechanism. This implementation
 /// is recommended when the number of basis elements cannot be explicitly stored and only a small
 /// fraction of basis elements have non-zero coefficients.
@@ -29,14 +29,14 @@ use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 /// - `a_i` are coefficients in the ring `R`
 /// - `c_i` are basis elements of type `C`
 ///
-/// When `R` is a field (satisfies [`crate::Field`]), the module becomes a vector space.
+/// When `R` is a field (satisfies [`crate::FieldLike`]), the module becomes a vector space.
 ///
 /// # Examples
 ///
 /// ## Creating and manipulating modules
 ///
 /// ```rust
-/// use chomp3rs::{HashMapModule, Cyclic, Module};
+/// use chomp3rs::{HashMapModule, Cyclic, ModuleLike};
 ///
 /// // Create a module over the field Z/5Z with basis in u32
 /// let mut module = HashMapModule::<u32, Cyclic<5>>::new();
@@ -53,7 +53,7 @@ use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 /// ## Module arithmetic
 ///
 /// ```rust
-/// use chomp3rs::{HashMapModule, Cyclic, Module};
+/// use chomp3rs::{HashMapModule, Cyclic, ModuleLike};
 ///
 /// let module1 = HashMapModule::<i32, Cyclic<7>>::from([(1, Cyclic::from(3)), (2, Cyclic::from(3))]);
 /// let module2 = HashMapModule::from([(1, Cyclic::from(5)), (3, Cyclic::from(1))]);
@@ -67,7 +67,7 @@ use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 /// ## Scalar multiplication
 ///
 /// ```rust
-/// use chomp3rs::{HashMapModule, Cyclic, Module};
+/// use chomp3rs::{HashMapModule, Cyclic, ModuleLike};
 ///
 /// let mut module = HashMapModule::<i32, Cyclic<5>>::from([(1, Cyclic::from(2)), (2, Cyclic::from(3))]);
 /// module.scalar_mul(Cyclic::from(2));
@@ -89,9 +89,12 @@ impl<C, R, H: Default> HashMapModule<C, R, H> {
     }
 }
 
-impl<C: Clone + Eq + Hash, R: Ring, H: BuildHasher + Default + Clone> Module<C, R>
+impl<C: Clone + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone> ModuleLike
     for HashMapModule<C, R, H>
 {
+    type Cell = C;
+    type Ring = R;
+
     fn new() -> Self {
         Self {
             map: HashMap::<C, R, H>::with_hasher(H::default()),
@@ -124,7 +127,7 @@ impl<C: Clone + Eq + Hash, R: Ring, H: BuildHasher + Default + Clone> Module<C, 
 impl<C, R, H> Display for HashMapModule<C, R, H>
 where
     C: Display,
-    R: Ring + Display,
+    R: RingLike + Display,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         let non_zero: Vec<_> = self
@@ -154,7 +157,7 @@ where
     }
 }
 
-impl<C, R: Ring, H> Neg for HashMapModule<C, R, H> {
+impl<C, R: RingLike, H> Neg for HashMapModule<C, R, H> {
     type Output = Self;
 
     fn neg(mut self) -> Self::Output {
@@ -165,9 +168,9 @@ impl<C, R: Ring, H> Neg for HashMapModule<C, R, H> {
     }
 }
 
-impl<C: Clone + Eq + Hash, R: Ring, H: BuildHasher> AddAssign for HashMapModule<C, R, H>
+impl<C: Clone + Eq + Hash, R: RingLike, H: BuildHasher> AddAssign for HashMapModule<C, R, H>
 where
-    HashMapModule<C, R, H>: Module<C, R>,
+    HashMapModule<C, R, H>: ModuleLike<Cell = C, Ring = R>,
 {
     fn add_assign(&mut self, rhs: Self) {
         for (cell, coef) in rhs.map.iter() {
@@ -183,9 +186,9 @@ where
     }
 }
 
-impl<C, R: Ring, H> Add for HashMapModule<C, R, H>
+impl<C, R: RingLike, H> Add for HashMapModule<C, R, H>
 where
-    HashMapModule<C, R, H>: Module<C, R>,
+    HashMapModule<C, R, H>: ModuleLike,
 {
     type Output = Self;
 
@@ -195,9 +198,9 @@ where
     }
 }
 
-impl<C: Clone + Eq + Hash, R: Ring, H: BuildHasher> SubAssign for HashMapModule<C, R, H>
+impl<C: Clone + Eq + Hash, R: RingLike, H: BuildHasher> SubAssign for HashMapModule<C, R, H>
 where
-    HashMapModule<C, R, H>: Module<C, R>,
+    HashMapModule<C, R, H>: ModuleLike<Cell = C, Ring = R>,
 {
     fn sub_assign(&mut self, rhs: Self) {
         for (cell, coef) in rhs.map.iter() {
@@ -213,9 +216,9 @@ where
     }
 }
 
-impl<C, R: Ring, H> Sub for HashMapModule<C, R, H>
+impl<C, R: RingLike, H> Sub for HashMapModule<C, R, H>
 where
-    HashMapModule<C, R, H>: Module<C, R>,
+    HashMapModule<C, R, H>: ModuleLike,
 {
     type Output = Self;
 
@@ -228,7 +231,7 @@ where
 impl<C, R, H> PartialEq for HashMapModule<C, R, H>
 where
     C: Clone + Eq + Hash,
-    R: Ring,
+    R: RingLike,
 {
     fn eq(&self, other: &Self) -> bool {
         // Filter out zero-coefficient entries and clone to build new Hashmaps

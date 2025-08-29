@@ -4,7 +4,7 @@
 
 pub use cyclic::Cyclic;
 pub use module::HashMapModule;
-pub use traits::{Additive, AlgebraicBase, Field, Module, Multiplicative, Ring};
+pub use traits::{Additive, AlgebraicBase, FieldLike, ModuleLike, Multiplicative, RingLike};
 
 mod cyclic;
 mod module;
