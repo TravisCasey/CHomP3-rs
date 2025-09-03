@@ -2,11 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map};
 use std::convert::From;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::hash::{BuildHasher, Hash, RandomState};
-use std::iter::FromIterator;
+use std::iter::{Filter, FromIterator};
 use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
 use crate::{ModuleLike, RingLike};
@@ -21,14 +21,14 @@ use crate::{ModuleLike, RingLike};
 ///
 /// # Mathematical Background
 ///
-/// An algebraic module over a ring `R` with basis type `C` represents formal
+/// An algebraic module over a ring `R` with basis type `B` represents formal
 /// linear combinations of the form:
 ///
 /// $ a_1c_1 + a_2c_2 + ... + a_nc_n $
 ///
 /// where:
 /// - `a_i` are coefficients in the ring `R`
-/// - `c_i` are basis elements of type `C`
+/// - `c_i` are basis elements of type `B`
 ///
 /// When `R` is a field (satisfies [`crate::FieldLike`]), the module becomes a
 /// vector space.
@@ -79,34 +79,38 @@ use crate::{ModuleLike, RingLike};
 ///     (1, Cyclic::from(2)),
 ///     (2, Cyclic::from(3)),
 /// ]);
-/// module.scalar_mul(Cyclic::from(2));
+/// module = module.scalar_mul(Cyclic::from(2));
 ///
 /// assert_eq!(module.coef(&1), Cyclic::from(4)); // 2 * 2 = 4 (mod 4)
 /// assert_eq!(module.coef(&2), Cyclic::from(1)); // 3 * 2 = 6 = 1 (mod 5)
 /// ```
 #[derive(Clone, Debug)]
-pub struct HashMapModule<C, R, H = RandomState> {
-    map: HashMap<C, R, H>,
+pub struct HashMapModule<B, R, H = RandomState> {
+    map: HashMap<B, R, H>,
 }
 
-impl<C, R, H: Default> HashMapModule<C, R, H> {
+impl<B, R, H: Default> HashMapModule<B, R, H> {
     /// Create a new `HashMapModule` with the given capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            map: HashMap::<C, R, H>::with_capacity_and_hasher(capacity, H::default()),
+            map: HashMap::<B, R, H>::with_capacity_and_hasher(capacity, H::default()),
         }
     }
 }
 
-impl<C: Clone + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone> ModuleLike
-    for HashMapModule<C, R, H>
+impl<B: Clone + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone> ModuleLike
+    for HashMapModule<B, R, H>
 {
-    type Cell = C;
+    type Cell = B;
+    type Iter<'a>
+        = Filter<hash_map::Iter<'a, B, R>, fn(&(&'a B, &'a R)) -> bool>
+    where
+        Self: 'a;
     type Ring = R;
 
     fn new() -> Self {
         Self {
-            map: HashMap::<C, R, H>::with_hasher(H::default()),
+            map: HashMap::<B, R, H>::with_hasher(H::default()),
         }
     }
 
@@ -114,15 +118,15 @@ impl<C: Clone + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone> Module
         self.map.clear();
     }
 
-    fn coef(&self, cell: &C) -> R {
+    fn coef(&self, cell: &B) -> R {
         self.map.get(cell).cloned().unwrap_or(R::zero())
     }
 
-    fn coef_mut(&mut self, cell: &C) -> &mut R {
+    fn coef_mut(&mut self, cell: &B) -> &mut R {
         self.map.entry(cell.clone()).or_insert_with(|| R::zero())
     }
 
-    fn scalar_mul(&mut self, coef: R) {
+    fn scalar_mul(mut self, coef: R) -> Self {
         if coef == R::zero() {
             self.clear();
         } else if coef != R::one() {
@@ -130,12 +134,17 @@ impl<C: Clone + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone> Module
                 *cell_coef *= coef.clone();
             }
         }
+        self
+    }
+
+    fn iter(&self) -> Self::Iter<'_> {
+        self.map.iter().filter(|&(_cell, coef)| *coef != R::zero())
     }
 }
 
-impl<C, R, H> Display for HashMapModule<C, R, H>
+impl<B, R, H> Display for HashMapModule<B, R, H>
 where
-    C: Display,
+    B: Display,
     R: RingLike + Display,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
@@ -166,7 +175,7 @@ where
     }
 }
 
-impl<C, R: RingLike, H> Neg for HashMapModule<C, R, H> {
+impl<B, R: RingLike, H> Neg for HashMapModule<B, R, H> {
     type Output = Self;
 
     fn neg(mut self) -> Self::Output {
@@ -177,9 +186,9 @@ impl<C, R: RingLike, H> Neg for HashMapModule<C, R, H> {
     }
 }
 
-impl<C: Clone + Eq + Hash, R: RingLike, H: BuildHasher> AddAssign for HashMapModule<C, R, H>
+impl<B: Clone + Eq + Hash, R: RingLike, H: BuildHasher> AddAssign for HashMapModule<B, R, H>
 where
-    HashMapModule<C, R, H>: ModuleLike<Cell = C, Ring = R>,
+    HashMapModule<B, R, H>: ModuleLike<Cell = B, Ring = R>,
 {
     fn add_assign(&mut self, rhs: Self) {
         for (cell, coef) in rhs.map.iter() {
@@ -195,9 +204,9 @@ where
     }
 }
 
-impl<C, R: RingLike, H> Add for HashMapModule<C, R, H>
+impl<B, R: RingLike, H> Add for HashMapModule<B, R, H>
 where
-    HashMapModule<C, R, H>: ModuleLike,
+    HashMapModule<B, R, H>: ModuleLike,
 {
     type Output = Self;
 
@@ -207,9 +216,9 @@ where
     }
 }
 
-impl<C: Clone + Eq + Hash, R: RingLike, H: BuildHasher> SubAssign for HashMapModule<C, R, H>
+impl<B: Clone + Eq + Hash, R: RingLike, H: BuildHasher> SubAssign for HashMapModule<B, R, H>
 where
-    HashMapModule<C, R, H>: ModuleLike<Cell = C, Ring = R>,
+    HashMapModule<B, R, H>: ModuleLike<Cell = B, Ring = R>,
 {
     fn sub_assign(&mut self, rhs: Self) {
         for (cell, coef) in rhs.map.iter() {
@@ -225,9 +234,9 @@ where
     }
 }
 
-impl<C, R: RingLike, H> Sub for HashMapModule<C, R, H>
+impl<B, R: RingLike, H> Sub for HashMapModule<B, R, H>
 where
-    HashMapModule<C, R, H>: ModuleLike,
+    HashMapModule<B, R, H>: ModuleLike,
 {
     type Output = Self;
 
@@ -237,9 +246,9 @@ where
     }
 }
 
-impl<C, R, H> PartialEq for HashMapModule<C, R, H>
+impl<B, R, H> PartialEq for HashMapModule<B, R, H>
 where
-    C: Clone + Eq + Hash,
+    B: Clone + Eq + Hash,
     R: RingLike,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -262,31 +271,31 @@ where
     }
 }
 
-impl<C, R, H> Eq for HashMapModule<C, R, H> where HashMapModule<C, R, H>: PartialEq {}
+impl<B, R, H> Eq for HashMapModule<B, R, H> where HashMapModule<B, R, H>: PartialEq {}
 
-impl<C, R, H, const N: usize> From<[(C, R); N]> for HashMapModule<C, R, H>
+impl<B, R, H, const N: usize> From<[(B, R); N]> for HashMapModule<B, R, H>
 where
-    C: Eq + Hash,
+    B: Eq + Hash,
     H: BuildHasher + Default,
 {
-    fn from(items: [(C, R); N]) -> Self {
+    fn from(items: [(B, R); N]) -> Self {
         Self {
-            map: HashMap::<C, R, H>::from_iter(items),
+            map: HashMap::<B, R, H>::from_iter(items),
         }
     }
 }
 
-impl<C, R, H> FromIterator<(C, R)> for HashMapModule<C, R, H>
+impl<B, R, H> FromIterator<(B, R)> for HashMapModule<B, R, H>
 where
-    C: Eq + Hash,
+    B: Eq + Hash,
     H: BuildHasher + Default,
 {
     fn from_iter<T>(iter: T) -> Self
     where
-        T: IntoIterator<Item = (C, R)>,
+        T: IntoIterator<Item = (B, R)>,
     {
         Self {
-            map: HashMap::<C, R, H>::from_iter(iter),
+            map: HashMap::<B, R, H>::from_iter(iter),
         }
     }
 }
@@ -535,15 +544,40 @@ mod tests {
 
         // Multiplication by 1 should be no-op
         let original = module.clone();
-        module.scalar_mul(Cyclic::from(1));
+        module = module.scalar_mul(Cyclic::one());
         assert_eq!(module, original);
 
-        module.scalar_mul(Cyclic::from(2));
+        module = module.scalar_mul(Cyclic::from(2));
         assert_eq!(module.coef(&1), Cyclic::from(4));
         assert_eq!(module.coef(&2), Cyclic::from(1));
 
         // Multiplication by 0 should clear
-        module.scalar_mul(Cyclic::from(0));
+        module = module.scalar_mul(Cyclic::from(0));
         assert_eq!(module, HashMapModule::new());
+    }
+
+    #[test]
+    fn test_iter() {
+        let mut module = HashMapModule::<u32, Cyclic<7>>::from([
+            (1, Cyclic::from(3)),
+            (2, Cyclic::from(0)), // Should be filtered out
+            (3, Cyclic::from(5)),
+            (4, Cyclic::from(0)), // Should be filtered out
+        ]);
+
+        // Add a zero coefficient entry to test filtering
+        module.insert_or_add(&5, Cyclic::from(0));
+
+        let mut collected: Vec<_> = module.iter().map(|(cell, coef)| (*cell, *coef)).collect();
+        collected.sort_by_key(|(cell, _)| *cell);
+
+        let expected = vec![(1, Cyclic::from(3)), (3, Cyclic::from(5))];
+
+        assert_eq!(collected, expected);
+
+        // Test empty module
+        let empty_module = HashMapModule::<u32, Cyclic<7>>::new();
+        let empty_collected: Vec<_> = empty_module.iter().collect();
+        assert_eq!(empty_collected, vec![]);
     }
 }

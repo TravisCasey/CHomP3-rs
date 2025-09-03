@@ -15,7 +15,7 @@ use std::hash::Hash;
 use super::traits::Grader;
 
 /// A grader that stores cell grades in a `HashMap`. Cells (instances of the
-/// type parameter `C`) present in the map return their stored grade, while
+/// type parameter `B`) present in the map return their stored grade, while
 /// cells not present return a configurable default grade.
 ///
 /// This implementation provides efficient grade lookup and is suitable for most
@@ -35,17 +35,17 @@ use super::traits::Grader;
 /// assert_eq!(grader.grade(&3), 0); // default grade
 /// ```
 #[derive(Clone, Debug, Default)]
-pub struct HashMapGrader<C>
+pub struct HashMapGrader<B>
 where
-    C: Hash + Eq + Clone,
+    B: Hash + Eq + Clone,
 {
-    grades: HashMap<C, u32>,
+    grades: HashMap<B, u32>,
     default_grade: u32,
 }
 
-impl<C> HashMapGrader<C>
+impl<B> HashMapGrader<B>
 where
-    C: Hash + Eq + Clone,
+    B: Hash + Eq + Clone,
 {
     /// Create a new empty grader with a specified default grade.
     ///
@@ -65,7 +65,7 @@ where
     /// different default grade, use the
     /// [`HashMapGrader::from_map_with_default`] method.
     #[must_use]
-    pub fn from_map(grades: HashMap<C, u32>) -> Self {
+    pub fn from_map(grades: HashMap<B, u32>) -> Self {
         Self {
             grades,
             default_grade: 0,
@@ -73,7 +73,7 @@ where
     }
 
     /// Create a grader from an existing `HashMap` with a custom default grade.
-    pub fn from_map_with_default(grades: HashMap<C, u32>, default_grade: u32) -> Self {
+    pub fn from_map_with_default(grades: HashMap<B, u32>, default_grade: u32) -> Self {
         Self {
             grades,
             default_grade,
@@ -99,8 +99,8 @@ where
     #[must_use]
     pub fn from_cells_with_fn<I, F>(cells: I, grade_fn: F) -> Self
     where
-        I: IntoIterator<Item = C>,
-        F: Fn(&C) -> u32,
+        I: IntoIterator<Item = B>,
+        F: Fn(&B) -> u32,
     {
         let grades = cells
             .into_iter()
@@ -137,7 +137,7 @@ where
     #[must_use]
     pub fn uniform<I>(cells: I, uniform_grade: u32, default_grade: u32) -> Self
     where
-        I: IntoIterator<Item = C>,
+        I: IntoIterator<Item = B>,
     {
         let grades = cells
             .into_iter()
@@ -151,7 +151,7 @@ where
     }
 
     /// Get an immutable reference to the underlying `HashMap`.
-    pub fn grades(&self) -> &HashMap<C, u32> {
+    pub fn grades(&self) -> &HashMap<B, u32> {
         &self.grades
     }
 
@@ -160,7 +160,7 @@ where
     /// # Warning
     /// Use caution when mutating the grades in conjunction with other
     /// algorithms that may rely on or assume the consistency of grades.
-    pub fn grades_mut(&mut self) -> &mut HashMap<C, u32> {
+    pub fn grades_mut(&mut self) -> &mut HashMap<B, u32> {
         &mut self.grades
     }
 
@@ -176,22 +176,22 @@ where
     }
 }
 
-impl<C> Grader<C> for HashMapGrader<C>
+impl<B> Grader<B> for HashMapGrader<B>
 where
-    C: Hash + Eq + Clone,
+    B: Hash + Eq + Clone,
 {
-    fn grade(&self, cell: &C) -> u32 {
+    fn grade(&self, cell: &B) -> u32 {
         self.grades.get(cell).copied().unwrap_or(self.default_grade)
     }
 }
 
-impl<C> FromIterator<(C, u32)> for HashMapGrader<C>
+impl<B> FromIterator<(B, u32)> for HashMapGrader<B>
 where
-    C: Hash + Eq + Clone,
+    B: Hash + Eq + Clone,
 {
     fn from_iter<T>(iter: T) -> Self
     where
-        T: IntoIterator<Item = (C, u32)>,
+        T: IntoIterator<Item = (B, u32)>,
     {
         Self::from_map(HashMap::from_iter(iter))
     }

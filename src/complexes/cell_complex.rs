@@ -71,11 +71,14 @@ where
     }
 }
 
-impl<M> ComplexLike<M> for CellComplex<M>
+impl<M> ComplexLike for CellComplex<M>
 where
     M: ModuleLike<Cell = u32>,
 {
+    type Cell = u32;
     type CellIterator = CellRangeIterator;
+    type Module = M;
+    type Ring = M::Ring;
 
     fn cell_iter(&self) -> Self::CellIterator {
         CellRangeIterator {
@@ -84,11 +87,11 @@ where
         }
     }
 
-    fn boundary(&self, cell: &u32) -> M {
+    fn boundary_of_cell(&self, cell: &u32) -> M {
         self.boundaries[*cell as usize].clone()
     }
 
-    fn coboundary(&self, cell: &u32) -> M {
+    fn coboundary_of_cell(&self, cell: &u32) -> M {
         self.coboundaries[*cell as usize].clone()
     }
 
@@ -209,7 +212,7 @@ mod tests {
         assert_eq!(complex.grade(&0), 0);
         assert_eq!(complex.cell_dimension(&0), 0);
 
-        let boundary = complex.boundary(&0);
+        let boundary = complex.boundary_of_cell(&0);
         assert_eq!(boundary, TestModule::new()); // Empty boundary
 
         let cells: Vec<_> = complex.cell_iter().collect();
@@ -232,7 +235,7 @@ mod tests {
         assert_eq!(complex.grade(&2), 0);
 
         // Check boundary of edge
-        let edge_boundary = complex.boundary(&2);
+        let edge_boundary = complex.boundary_of_cell(&2);
         assert_eq!(edge_boundary.coef(&0), -Cyclic::one());
         assert_eq!(edge_boundary.coef(&1), Cyclic::one());
 
@@ -270,5 +273,60 @@ mod tests {
         for i in 0..7 {
             assert!(cells.contains(&i));
         }
+    }
+
+    #[test]
+    fn test_chain_boundary_computation() {
+        let complex = create_graded_triangle_complex();
+
+        // Create a chain that is a linear combination of edges: 2*edge3 + 3*edge4 -
+        // edge5
+        let mut edge_chain = TestModule::new();
+        edge_chain.insert_or_add(&3, Cyclic::from(2)); // 2 * edge(0->1)
+        edge_chain.insert_or_add(&4, Cyclic::from(3)); // 3 * edge(1->2)
+        edge_chain.insert_or_add(&5, -Cyclic::one()); // -1 * edge(2->0)
+
+        // Compute boundary of the chain using BoundaryComputer trait
+        let chain_boundary = complex.boundary(&edge_chain);
+
+        // Expected boundary:
+        // 2*(vertex1 - vertex0) + 3*(vertex2 - vertex1) - 1*(vertex0 - vertex2)
+        // = 2*vertex1 - 2*vertex0 + 3*vertex2 - 3*vertex1 - vertex0 + vertex2
+        // = -3*vertex0 - vertex1 + 4*vertex2
+        let mut expected_boundary = TestModule::new();
+        expected_boundary.insert_or_add(&0, Cyclic::from(2)); // -3 = 2 (mod 5)
+        expected_boundary.insert_or_add(&1, Cyclic::from(4)); // -1 = 4 (mod 5)
+        expected_boundary.insert_or_add(&2, Cyclic::from(4)); // 4 = 4 (mod 5)
+
+        assert_eq!(chain_boundary, expected_boundary);
+    }
+
+    #[test]
+    fn test_chain_coboundary_computation() {
+        let complex = create_graded_triangle_complex();
+
+        // Create a chain that is a linear combination of vertices: vertex0 + 2*vertex1
+        // - vertex2
+        let mut vertex_chain = TestModule::new();
+        vertex_chain.insert_or_add(&0, Cyclic::one());
+        vertex_chain.insert_or_add(&1, Cyclic::from(2));
+        vertex_chain.insert_or_add(&2, -Cyclic::one());
+
+        // Compute coboundary of the chain using CoboundaryComputer trait
+        let chain_coboundary = complex.coboundary(&vertex_chain);
+
+        // Expected coboundary:
+        // For vertex0: -edge3 + edge5
+        // For vertex1: -edge4 + edge3 (multiplied by 2)
+        // For vertex2: -edge5 + edge4 (multiplied by -1)
+        // Total: -edge3 + edge5 + 2*(-edge4 + edge3) + (-1)*(-edge5 + edge4)
+        //      = -edge3 + edge5 - 2*edge4 + 2*edge3 + edge5 - edge4
+        //      = edge3 + 2*edge5 - 3*edge4
+        let mut expected_coboundary = TestModule::new();
+        expected_coboundary.insert_or_add(&3, Cyclic::one());
+        expected_coboundary.insert_or_add(&4, Cyclic::from(2)); // -3 = 2 (mod 5)
+        expected_coboundary.insert_or_add(&5, Cyclic::from(2));
+
+        assert_eq!(chain_coboundary, expected_coboundary);
     }
 }

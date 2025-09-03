@@ -52,6 +52,10 @@ pub trait ModuleLike: AlgebraicBase + Additive {
     type Cell;
     /// Coefficient type applied to cells in the module.
     type Ring: RingLike;
+    /// Iterator type for iterating over (cell, coefficient) pairs.
+    type Iter<'a>: Iterator<Item = (&'a Self::Cell, &'a Self::Ring)>
+    where
+        Self: 'a;
 
     /// Create an empty module element.
     fn new() -> Self;
@@ -65,7 +69,15 @@ pub trait ModuleLike: AlgebraicBase + Additive {
     fn coef_mut(&mut self, cell: &Self::Cell) -> &mut Self::Ring;
     /// Perform scalar multiplication of `self` with `coef`. Effectively, this
     /// multiplies each coefficient in `self` by `coef`.
-    fn scalar_mul(&mut self, coef: Self::Ring);
+    fn scalar_mul(self, coef: Self::Ring) -> Self;
+
+    /// Returns an iterator over all (cell, coefficient) pairs in the module.
+    ///
+    /// This iterator provides immutable access to the terms in the module,
+    /// yielding pairs of cells and their corresponding coefficients. It may be
+    /// efficient to filter out terms with zero coefficient, but it is not
+    /// required.
+    fn iter(&self) -> Self::Iter<'_>;
 
     /// If `cell` is not in `self`, insert it with coefficient `coef`. Else, add
     /// `coef` to the existing coefficient of `cell` in `self`.

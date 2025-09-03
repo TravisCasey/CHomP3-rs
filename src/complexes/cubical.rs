@@ -67,8 +67,8 @@
 //! let complex: CubicalComplex<HashMapModule<Cube, Cyclic<5>>, _> =
 //!     CubicalComplex::new(min, max, grader);
 //!
-//! assert_eq!(complex.boundary(&vertex), HashMapModule::new());
-//! assert_eq!(complex.boundary(&edge), HashMapModule::from([(vertex, -Cyclic::one())]));
+//! assert_eq!(complex.boundary_of_cell(&vertex), HashMapModule::new());
+//! assert_eq!(complex.boundary_of_cell(&edge), HashMapModule::from([(vertex, -Cyclic::one())]));
 //! ```
 
 use std::fmt;
@@ -458,7 +458,7 @@ impl Display for Cube {
 /// // Use the complex for homological computations
 /// assert_eq!(complex.dimension(), 2);
 /// assert!(complex.contains_cube(&vertex));
-/// let boundary = complex.boundary(&vertex);
+/// let boundary = complex.boundary_of_cell(&vertex);
 /// ```
 #[derive(Clone, Debug)]
 pub struct CubicalComplex<M, G> {
@@ -528,12 +528,15 @@ impl<M, G> CubicalComplex<M, G> {
     }
 }
 
-impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> ComplexLike<M>
+impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> ComplexLike
     for CubicalComplex<M, G>
 {
+    type Cell = Cube;
     type CellIterator = CubeIterator;
+    type Module = M;
+    type Ring = R;
 
-    fn boundary(&self, cell: &Cube) -> M {
+    fn boundary_of_cell(&self, cell: &Cube) -> M {
         debug_assert!(
             self.contains_cube(cell),
             "Cube is not in the complex bounds"
@@ -570,7 +573,7 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
         result
     }
 
-    fn coboundary(&self, cell: &Cube) -> M {
+    fn coboundary_of_cell(&self, cell: &Cube) -> M {
         debug_assert!(
             self.contains_cube(cell),
             "Cube is not in the complex bounds"
@@ -812,7 +815,7 @@ mod tests {
 
         // Test boundary of a 1-cube (edge) - horizontal edge
         let edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[true, false]);
-        let boundary = complex.boundary(&edge);
+        let boundary = complex.boundary_of_cell(&edge);
         assert_eq!(
             boundary,
             HashMapModule::from([
@@ -823,7 +826,7 @@ mod tests {
 
         // Test coboundary of a 0-cube (vertex)
         let vertex = Cube::vertex(Orthant::new(vec![1, 1]));
-        let coboundary = complex.coboundary(&vertex);
+        let coboundary = complex.coboundary_of_cell(&vertex);
         assert_eq!(
             coboundary,
             HashMapModule::from([
@@ -914,7 +917,7 @@ mod tests {
         assert_eq!(complex.grade(&cube_3d), 9); // Direct grade from orthant (1,1,1)
 
         // Test boundary relations (vertex has empty boundary)
-        let vertex_boundary: HashMapModule<Cube, Cyclic<7>> = complex.boundary(&vertex);
+        let vertex_boundary: HashMapModule<Cube, Cyclic<7>> = complex.boundary_of_cell(&vertex);
         assert_eq!(vertex_boundary, HashMapModule::new());
 
         // Test that all cubes are contained
@@ -961,5 +964,103 @@ mod tests {
             cube_3d.to_string(),
             "Cube[base: (2, 3, 4), dual: (2, 2, 4), extent: 101]"
         );
+    }
+
+    #[test]
+    fn test_chain_boundary_computation() {
+        let min = Orthant::new(vec![0, 0]);
+        let max = Orthant::new(vec![2, 2]);
+
+        // Create orthant grader for TopCubeGrader
+        let mut orthant_grades = HashMap::new();
+        orthant_grades.insert(Orthant::new(vec![0, 0]), 4);
+        orthant_grades.insert(Orthant::new(vec![1, 0]), 2);
+        orthant_grades.insert(Orthant::new(vec![0, 1]), 3);
+        orthant_grades.insert(Orthant::new(vec![1, 1]), 1);
+        let orthant_grader = HashMapGrader::from_map(orthant_grades);
+        let grader = TopCubeGrader::new(orthant_grader, Some(1));
+
+        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
+            CubicalComplex::new(min, max, grader);
+
+        // Create a chain that is a linear combination of edges:
+        // 2 * horizontal_edge + 3 * vertical_edge
+        let horizontal_edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[true, false]);
+        let vertical_edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[false, true]);
+
+        let mut edge_chain = HashMapModule::new();
+        edge_chain.insert_or_add(&horizontal_edge, Cyclic::from(2));
+        edge_chain.insert_or_add(&vertical_edge, Cyclic::from(3));
+
+        // Compute boundary of the chain using BoundaryComputer trait
+        let chain_boundary = complex.boundary(&edge_chain);
+
+        // Expected boundary:
+        // 2 * boundary(horizontal_edge) + 3 * boundary(vertical_edge)
+        // = 2 * (vertex(2,1) - vertex(1,1)) + 3 * (vertex(1,2) - vertex(1,1))
+        // = 2*vertex(2,1) - 2*vertex(1,1) + 3*vertex(1,2) - 3*vertex(1,1)
+        // = 2*vertex(2,1) + 3*vertex(1,2) - 5*vertex(1,1)
+        let vertex_11 = Cube::vertex(Orthant::new(vec![1, 1]));
+        let vertex_21 = Cube::vertex(Orthant::new(vec![2, 1]));
+        let vertex_12 = Cube::vertex(Orthant::new(vec![1, 2]));
+
+        assert_eq!(chain_boundary.coef(&vertex_11), Cyclic::from(2)); // -5 = 2 (mod 7)
+        assert_eq!(chain_boundary.coef(&vertex_21), Cyclic::from(2));
+        assert_eq!(chain_boundary.coef(&vertex_12), Cyclic::from(3));
+    }
+
+    #[test]
+    fn test_chain_coboundary_computation() {
+        let min = Orthant::new(vec![0, 0]);
+        let max = Orthant::new(vec![2, 2]);
+
+        // Create orthant grader for TopCubeGrader
+        let mut orthant_grades = HashMap::new();
+        orthant_grades.insert(Orthant::new(vec![0, 0]), 4);
+        orthant_grades.insert(Orthant::new(vec![1, 0]), 2);
+        orthant_grades.insert(Orthant::new(vec![0, 1]), 3);
+        orthant_grades.insert(Orthant::new(vec![1, 1]), 1);
+        let orthant_grader = HashMapGrader::from_map(orthant_grades);
+        let grader = TopCubeGrader::new(orthant_grader, Some(1));
+
+        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
+            CubicalComplex::new(min, max, grader);
+
+        // Create a chain that is a linear combination of vertices:
+        // vertex(1,1) + 2*vertex(1,2) - vertex(2,1)
+        let vertex_11 = Cube::vertex(Orthant::new(vec![1, 1]));
+        let vertex_12 = Cube::vertex(Orthant::new(vec![1, 2]));
+        let vertex_21 = Cube::vertex(Orthant::new(vec![2, 1]));
+
+        let mut vertex_chain = HashMapModule::new();
+        vertex_chain.insert_or_add(&vertex_11, Cyclic::one());
+        vertex_chain.insert_or_add(&vertex_12, Cyclic::from(2));
+        vertex_chain.insert_or_add(&vertex_21, -Cyclic::one());
+
+        // Compute coboundary of the chain using CoboundaryComputer trait
+        let chain_coboundary = complex.coboundary(&vertex_chain);
+
+        // The coboundary should be a linear combination of edges that have these
+        // vertices as faces. We expect edges connecting these vertices to
+        // appear with appropriate coefficients based on the chain coefficients
+        // and orientations.
+
+        // Check that some specific edges appear in the coboundary
+        let horizontal_edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[true, false]);
+        let vertical_edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[false, true]);
+
+        // The exact coefficients depend on the specific orientations and combinations,
+        // but we can verify that the coboundary is non-empty and contains expected
+        // edges
+        let coboundary_vertices: Vec<_> = chain_coboundary
+            .iter()
+            .map(|(cube, _)| cube.clone())
+            .collect();
+        assert!(!coboundary_vertices.is_empty());
+
+        // At least one of the expected edges should be in the coboundary
+        let contains_expected_edges = coboundary_vertices.contains(&horizontal_edge)
+            || coboundary_vertices.contains(&vertical_edge);
+        assert!(contains_expected_edges);
     }
 }
