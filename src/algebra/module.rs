@@ -13,15 +13,16 @@ use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
 /// HashMap-based implementation of algebraic modules.
 ///
-/// This module provides [`HashMapModule`], a concrete implementation of the [`ModuleLike`] trait
-/// using [`std::collections::HashMap`] as the underlying storage mechanism. This implementation
-/// is recommended when the number of basis elements cannot be explicitly stored and only a small
-/// fraction of basis elements have non-zero coefficients.
+/// This module provides [`HashMapModule`], a concrete implementation of the
+/// [`ModuleLike`] trait using [`std::collections::HashMap`] as the underlying
+/// storage mechanism. This implementation is recommended when the number of
+/// basis elements cannot be explicitly stored and only a small fraction of
+/// basis elements have non-zero coefficients.
 ///
 /// # Mathematical Background
 ///
-/// An algebraic module over a ring `R` with basis type `C` represents formal linear combinations of
-/// the form:
+/// An algebraic module over a ring `R` with basis type `C` represents formal
+/// linear combinations of the form:
 ///
 /// $ a_1c_1 + a_2c_2 + ... + a_nc_n $
 ///
@@ -29,7 +30,8 @@ use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 /// - `a_i` are coefficients in the ring `R`
 /// - `c_i` are basis elements of type `C`
 ///
-/// When `R` is a field (satisfies [`crate::FieldLike`]), the module becomes a vector space.
+/// When `R` is a field (satisfies [`crate::FieldLike`]), the module becomes a
+/// vector space.
 ///
 /// # Examples
 ///

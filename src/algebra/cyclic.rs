@@ -2,7 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! The `Cyclic` class implementing the cyclic field of integers with configurable modulus.
+//! The `Cyclic` class implementing the cyclic field of integers with
+//! configurable modulus.
 
 use crate::algebra::traits::{FieldLike, RingLike};
 
@@ -15,10 +16,10 @@ use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 /// The field of integers modulo `MOD`, for prime modulus values `MOD`.
 ///
 /// # Important Note
-/// `MOD` **must** be a prime number for the `FieldLike` implementation to be mathematically
-/// correct. While this is not explicitly checked at compile time, the implementation of `invert`
-/// and other dependent methods assume this property. Using a composite modulus may lead to
-/// incorrect results or panics.
+/// `MOD` **must** be a prime number for the `FieldLike` implementation to be
+/// mathematically correct. While this is not explicitly checked at compile
+/// time, the implementation of `invert` and other dependent methods assume this
+/// property. Using a composite modulus may lead to incorrect results or panics.
 ///
 /// Overflow and underflow are handled by the implementation.
 ///
@@ -36,8 +37,9 @@ pub struct Cyclic<const MOD: u64> {
 }
 
 impl<const MOD: u64> Cyclic<MOD> {
-    /// Create a new `Cyclic` instance with the given value modulo `MOD`. Panics if `MOD` is less
-    /// than 2; `MOD` is expected to be a prime number, though this is not explicitly checked.
+    /// Create a new `Cyclic` instance with the given value modulo `MOD`. Panics
+    /// if `MOD` is less than 2; `MOD` is expected to be a prime number,
+    /// though this is not explicitly checked.
     pub fn new(value: u64) -> Self {
         assert!(
             MOD > 1,

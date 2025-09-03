@@ -25,8 +25,9 @@ impl<T> Multiplicative for T where T: Mul<Output = Self> + MulAssign {}
 
 impl<T> AlgebraicBase for T where T: Sized + Clone + Eq {}
 
-/// Expected functionality for coefficient rings throughout `chomp3rs`. These coefficient rings are
-/// expected to be integral domains with unity, though this is not checked by this trait.
+/// Expected functionality for coefficient rings throughout `chomp3rs`. These
+/// coefficient rings are expected to be integral domains with unity, though
+/// this is not checked by this trait.
 pub trait RingLike: AlgebraicBase + Additive + Multiplicative {
     /// Creates a new ring element representing the additive identity.
     fn zero() -> Self;
@@ -34,18 +35,18 @@ pub trait RingLike: AlgebraicBase + Additive + Multiplicative {
     fn one() -> Self;
 }
 
-/// A type satisfying `FieldLike` is a ring in which every nonzero value is invertible; this inverse
-/// is fetched by the prescribed `invert` method.
+/// A type satisfying `FieldLike` is a ring in which every nonzero value is
+/// invertible; this inverse is fetched by the prescribed `invert` method.
 pub trait FieldLike: RingLike {
-    /// Return the multiplicative inverse of `self`. Should not be called on the zero element of
-    /// the ring `Self` (i.e. `Self::zero()`) and may panic if done so. Otherwise, the method is
-    /// expected to return correctly.
+    /// Return the multiplicative inverse of `self`. Should not be called on the
+    /// zero element of the ring `Self` (i.e. `Self::zero()`) and may panic
+    /// if done so. Otherwise, the method is expected to return correctly.
     fn invert(&self) -> Self;
 }
 
-/// The expected functionality for types implementing algebraic modules over the coefficient ring
-/// `R`. Objects of a type satisfying `ModuleLike` represent `R`-linear combinations of objects of
-/// the basis type `C`.
+/// The expected functionality for types implementing algebraic modules over the
+/// coefficient ring `R`. Objects of a type satisfying `ModuleLike` represent
+/// `R`-linear combinations of objects of the basis type `C`.
 pub trait ModuleLike: AlgebraicBase + Additive {
     /// The type of the basis elements of the module.
     type Cell;
@@ -54,19 +55,20 @@ pub trait ModuleLike: AlgebraicBase + Additive {
 
     /// Create an empty module element.
     fn new() -> Self;
-    /// Empty the module element `self`; the implementation details (e.g. memory management, etc.)
-    /// are not otherwise prescribed by this trait.
+    /// Empty the module element `self`; the implementation details (e.g. memory
+    /// management, etc.) are not otherwise prescribed by this trait.
     fn clear(&mut self);
     /// Return the coefficient of `cell` in `self`, if it exists.
     fn coef(&self, cell: &Self::Cell) -> Self::Ring;
-    /// Return a mutable reference to the coefficient of `cell` in `self`, if it exists.
+    /// Return a mutable reference to the coefficient of `cell` in `self`, if it
+    /// exists.
     fn coef_mut(&mut self, cell: &Self::Cell) -> &mut Self::Ring;
-    /// Perform scalar multiplication of `self` with `coef`. Effectively, this multiplies each
-    /// coefficient in `self` by `coef`.
+    /// Perform scalar multiplication of `self` with `coef`. Effectively, this
+    /// multiplies each coefficient in `self` by `coef`.
     fn scalar_mul(&mut self, coef: Self::Ring);
 
-    /// If `cell` is not in `self`, insert it with coefficient `coef`. Else, add `coef` to the
-    /// existing coefficient of `cell` in `self`.
+    /// If `cell` is not in `self`, insert it with coefficient `coef`. Else, add
+    /// `coef` to the existing coefficient of `cell` in `self`.
     fn insert_or_add(&mut self, cell: &Self::Cell, coef: Self::Ring) {
         *self.coef_mut(cell) += coef
     }

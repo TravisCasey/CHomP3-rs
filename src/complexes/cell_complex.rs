@@ -4,12 +4,14 @@
 
 use crate::{ComplexLike, ModuleLike};
 
-/// A simple concrete implementation of a cell complex with vector-based storage.
+/// A simple concrete implementation of a cell complex with vector-based
+/// storage.
 ///
-/// `CellComplex` represents a finite cell complex where cells are identified by `u32` indices.
-/// Each cell has associated dimensional information, grade, boundary, and coboundary data
-/// explicitly stored in parallel vectors for efficient access. However, there needs to be few
-/// enough cells that the memory overhead of storing these vectors is acceptable.
+/// `CellComplex` represents a finite cell complex where cells are identified by
+/// `u32` indices. Each cell has associated dimensional information, grade,
+/// boundary, and coboundary data explicitly stored in parallel vectors for
+/// efficient access. However, there needs to be few enough cells that the
+/// memory overhead of storing these vectors is acceptable.
 pub struct CellComplex<M>
 where
     M: ModuleLike<Cell = u32>,
@@ -44,9 +46,10 @@ impl<M> CellComplex<M>
 where
     M: ModuleLike<Cell = u32>,
 {
-    /// Creates a new cell complex from the provided data vectors. Each vector must have the same
-    /// length, which represents the number of cells in the complex. The dimension of the cell
-    /// complex is determined by the maximum dimension of the cells, or 0 if there are no cells.
+    /// Creates a new cell complex from the provided data vectors. Each vector
+    /// must have the same length, which represents the number of cells in
+    /// the complex. The dimension of the cell complex is determined by the
+    /// maximum dimension of the cells, or 0 if there are no cells.
     pub fn new(
         cell_dimensions: Vec<u32>,
         grades: Vec<u32>,
