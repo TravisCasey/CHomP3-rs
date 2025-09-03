@@ -3,7 +3,13 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub use cell_complex::CellComplex;
-pub use traits::ComplexLike;
+pub use cubical::{Cube, CubicalComplex, Orthant};
+pub use cubical_util::{CubeIterator, OrthantIterator, TopCubeGrader};
+pub use grading::HashMapGrader;
+pub use traits::{ComplexLike, Grader};
 
 mod cell_complex;
+mod cubical;
+mod cubical_util;
+mod grading;
 mod traits;
