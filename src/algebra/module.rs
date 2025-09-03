@@ -2,14 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{ModuleLike, RingLike};
-
 use std::collections::HashMap;
 use std::convert::From;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::hash::{BuildHasher, Hash, RandomState};
 use std::iter::FromIterator;
 use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
+
+use crate::{ModuleLike, RingLike};
 
 /// HashMap-based implementation of algebraic modules.
 ///
@@ -38,7 +38,7 @@ use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 /// ## Creating and manipulating modules
 ///
 /// ```rust
-/// use chomp3rs::{HashMapModule, Cyclic, ModuleLike};
+/// use chomp3rs::{Cyclic, HashMapModule, ModuleLike};
 ///
 /// // Create a module over the field Z/5Z with basis in u32
 /// let mut module = HashMapModule::<u32, Cyclic<5>>::new();
@@ -55,10 +55,14 @@ use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 /// ## Module arithmetic
 ///
 /// ```rust
-/// use chomp3rs::{HashMapModule, Cyclic, ModuleLike};
+/// use chomp3rs::{Cyclic, HashMapModule, ModuleLike};
 ///
-/// let module1 = HashMapModule::<i32, Cyclic<7>>::from([(1, Cyclic::from(3)), (2, Cyclic::from(3))]);
-/// let module2 = HashMapModule::from([(1, Cyclic::from(5)), (3, Cyclic::from(1))]);
+/// let module1 = HashMapModule::<i32, Cyclic<7>>::from([
+///     (1, Cyclic::from(3)),
+///     (2, Cyclic::from(3)),
+/// ]);
+/// let module2 =
+///     HashMapModule::from([(1, Cyclic::from(5)), (3, Cyclic::from(1))]);
 ///
 /// let sum = module1 + module2;
 /// assert_eq!(sum.coef(&1), Cyclic::from(1)); // 3 + 5 = 1 (mod 7)
@@ -69,9 +73,12 @@ use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 /// ## Scalar multiplication
 ///
 /// ```rust
-/// use chomp3rs::{HashMapModule, Cyclic, ModuleLike};
+/// use chomp3rs::{Cyclic, HashMapModule, ModuleLike};
 ///
-/// let mut module = HashMapModule::<i32, Cyclic<5>>::from([(1, Cyclic::from(2)), (2, Cyclic::from(3))]);
+/// let mut module = HashMapModule::<i32, Cyclic<5>>::from([
+///     (1, Cyclic::from(2)),
+///     (2, Cyclic::from(3)),
+/// ]);
 /// module.scalar_mul(Cyclic::from(2));
 ///
 /// assert_eq!(module.coef(&1), Cyclic::from(4)); // 2 * 2 = 4 (mod 4)
@@ -286,10 +293,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::hash::Hasher;
+
     use super::*;
     use crate::Cyclic;
-
-    use std::hash::Hasher;
 
     #[derive(Clone, Debug, Default)]
     struct SimpleHashBuilder {}

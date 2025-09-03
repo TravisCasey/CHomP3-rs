@@ -5,13 +5,13 @@
 //! The `Cyclic` class implementing the cyclic field of integers with
 //! configurable modulus.
 
-use crate::algebra::traits::{FieldLike, RingLike};
-
-use flint_sys::nmod_vec::{nmod_add, nmod_init, nmod_inv, nmod_mul, nmod_neg, nmod_sub, nmod_t};
-
 use std::convert::From;
 use std::fmt::{Display, Error, Formatter};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+
+use flint_sys::nmod_vec::{nmod_add, nmod_init, nmod_inv, nmod_mul, nmod_neg, nmod_sub, nmod_t};
+
+use crate::algebra::traits::{FieldLike, RingLike};
 
 /// The field of integers modulo `MOD`, for prime modulus values `MOD`.
 ///
@@ -72,6 +72,7 @@ impl<const MOD: u64> RingLike for Cyclic<MOD> {
     fn zero() -> Self {
         Self::new(0)
     }
+
     fn one() -> Self {
         Self::new(1)
     }
