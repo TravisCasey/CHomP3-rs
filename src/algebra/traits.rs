@@ -47,7 +47,7 @@ pub trait FieldLike: RingLike {
 /// The expected functionality for types implementing algebraic modules over the
 /// coefficient ring `R`. Objects of a type satisfying `ModuleLike` represent
 /// `R`-linear combinations of objects of the basis type `C`.
-pub trait ModuleLike: AlgebraicBase + Additive {
+pub trait ModuleLike: AlgebraicBase + Additive + FromIterator<(Self::Cell, Self::Ring)> {
     /// The type of the basis elements of the module.
     type Cell;
     /// Coefficient type applied to cells in the module.

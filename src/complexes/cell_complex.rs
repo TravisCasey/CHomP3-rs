@@ -87,12 +87,20 @@ where
         }
     }
 
-    fn boundary_of_cell(&self, cell: &u32) -> M {
-        self.boundaries[*cell as usize].clone()
+    fn cell_boundary_if(&self, cell: &u32, predicate: impl Fn(&u32) -> bool) -> M {
+        self.boundaries[*cell as usize]
+            .iter()
+            .filter(|(cell, _coef)| predicate(cell))
+            .map(|(cell, coef)| (*cell, coef.clone()))
+            .collect()
     }
 
-    fn coboundary_of_cell(&self, cell: &u32) -> M {
-        self.coboundaries[*cell as usize].clone()
+    fn cell_coboundary_if(&self, cell: &u32, predicate: impl Fn(&u32) -> bool) -> M {
+        self.coboundaries[*cell as usize]
+            .iter()
+            .filter(|(cell, _coef)| predicate(cell))
+            .map(|(cell, coef)| (*cell, coef.clone()))
+            .collect()
     }
 
     fn grade(&self, cell: &u32) -> u32 {
@@ -212,7 +220,7 @@ mod tests {
         assert_eq!(complex.grade(&0), 0);
         assert_eq!(complex.cell_dimension(&0), 0);
 
-        let boundary = complex.boundary_of_cell(&0);
+        let boundary = complex.cell_boundary(&0);
         assert_eq!(boundary, TestModule::new()); // Empty boundary
 
         let cells: Vec<_> = complex.cell_iter().collect();
@@ -235,7 +243,7 @@ mod tests {
         assert_eq!(complex.grade(&2), 0);
 
         // Check boundary of edge
-        let edge_boundary = complex.boundary_of_cell(&2);
+        let edge_boundary = complex.cell_boundary(&2);
         assert_eq!(edge_boundary.coef(&0), -Cyclic::one());
         assert_eq!(edge_boundary.coef(&1), Cyclic::one());
 
@@ -299,6 +307,87 @@ mod tests {
         expected_boundary.insert_or_add(&2, Cyclic::from(4)); // 4 = 4 (mod 5)
 
         assert_eq!(chain_boundary, expected_boundary);
+    }
+
+    #[test]
+    fn test_cell_boundary_if_with_predicate() {
+        let complex = create_graded_triangle_complex();
+
+        // Test boundary of edge 3 (vertex0 -> vertex1) with predicate that only
+        // includes vertex1
+        let edge_boundary_filtered = complex.cell_boundary_if(&3, |cell| *cell == 1);
+
+        let mut expected = TestModule::new();
+        expected.insert_or_add(&1, Cyclic::one()); // Only vertex1 should be included
+
+        assert_eq!(edge_boundary_filtered, expected);
+    }
+
+    #[test]
+    fn test_boundary_if_with_predicate() {
+        let complex = create_graded_triangle_complex();
+
+        // Create a chain of edges: edge3 + edge4
+        let mut edge_chain = TestModule::new();
+        edge_chain.insert_or_add(&3, Cyclic::one()); // edge(0->1)
+        edge_chain.insert_or_add(&4, Cyclic::one()); // edge(1->2)
+
+        // Compute boundary with predicate that only includes vertices 0 and 2
+        let chain_boundary_filtered =
+            complex.boundary_if(&edge_chain, |cell| *cell == 0 || *cell == 2);
+
+        let mut expected = TestModule::new();
+        expected.insert_or_add(&0, -Cyclic::one()); // From edge3 boundary
+        expected.insert_or_add(&2, Cyclic::one()); // From edge4 boundary
+
+        assert_eq!(chain_boundary_filtered, expected);
+    }
+
+    #[test]
+    fn test_cell_coboundary_methods() {
+        let complex = create_graded_triangle_complex();
+
+        // Test cell_coboundary for vertex 0
+        let vertex0_coboundary = complex.cell_coboundary(&0);
+
+        let mut expected = TestModule::new();
+        expected.insert_or_add(&3, -Cyclic::one()); // edge3 with coefficient -1
+        expected.insert_or_add(&5, Cyclic::one()); // edge5 with coefficient +1
+
+        assert_eq!(vertex0_coboundary, expected);
+    }
+
+    #[test]
+    fn test_cell_coboundary_if_with_predicate() {
+        let complex = create_graded_triangle_complex();
+
+        // Test coboundary of vertex 0 with predicate that only includes edge 3
+        let vertex0_coboundary_filtered = complex.cell_coboundary_if(&0, |cell| *cell == 3);
+
+        let mut expected = TestModule::new();
+        expected.insert_or_add(&3, -Cyclic::one()); // Only edge3 should be included
+
+        assert_eq!(vertex0_coboundary_filtered, expected);
+    }
+
+    #[test]
+    fn test_coboundary_if_with_predicate() {
+        let complex = create_graded_triangle_complex();
+
+        // Create a chain of vertices: vertex0 + vertex1
+        let mut vertex_chain = TestModule::new();
+        vertex_chain.insert_or_add(&0, Cyclic::one());
+        vertex_chain.insert_or_add(&1, Cyclic::one());
+
+        // Compute coboundary with predicate that only includes edge 3
+        let chain_coboundary_filtered = complex.coboundary_if(&vertex_chain, |cell| *cell == 3);
+
+        let mut expected = TestModule::new();
+        expected.insert_or_add(&3, -Cyclic::one()); // From vertex0 coboundary
+        expected.insert_or_add(&3, Cyclic::one()); // From vertex1 coboundary
+        // These should cancel out to zero
+
+        assert_eq!(chain_coboundary_filtered, TestModule::new());
     }
 
     #[test]

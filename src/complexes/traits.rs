@@ -26,25 +26,85 @@ pub trait ComplexLike {
     /// Iterator type for traversing all cells in the complex.
     type CellIterator: Iterator<Item = Self::Cell>;
 
-    /// Return the boundary chain of a cell as a module element.
+    /// Return the boundary chain of a cell as a module element subject to the
+    /// predicate `p` on the cell's faces.
     ///
     /// The boundary of a cell is a formal linear combination of its faces
     /// (lower-dimensional boundary cells).
-    fn boundary_of_cell(&self, cell: &Self::Cell) -> Self::Module;
+    fn cell_boundary_if(
+        &self,
+        cell: &Self::Cell,
+        predicate: impl Fn(&Self::Cell) -> bool,
+    ) -> Self::Module;
+
+    /// Return the boundary chain of a cell as a module element.
+    ///
+    /// This is a provided method that calls `cell_boundary_if` with a predicate
+    /// that accepts all cells.
+    fn cell_boundary(&self, cell: &Self::Cell) -> Self::Module {
+        self.cell_boundary_if(cell, |_| true)
+    }
+
+    /// Compute the boundary of a chain (formal linear combination of cells)
+    /// with a predicate `p` to filter which boundary cells are included.
+    ///
+    /// This is a provided method that applies the predicate to each boundary
+    /// cell before including it in the result.
+    fn boundary_if(
+        &self,
+        chain: &Self::Module,
+        predicate: impl Fn(&Self::Cell) -> bool,
+    ) -> Self::Module {
+        chain.iter().fold(Self::Module::new(), |acc, (cell, coef)| {
+            acc + self
+                .cell_boundary_if(cell, &predicate)
+                .scalar_mul(coef.clone())
+        })
+    }
 
     /// A provided method to compute the boundary of a chain (formal linear
     /// combination of cells) using the required `boundary_of_cell` method.
     fn boundary(&self, chain: &Self::Module) -> Self::Module {
         chain.iter().fold(Self::Module::new(), |acc, (cell, coef)| {
-            acc + self.boundary_of_cell(cell).scalar_mul(coef.clone())
+            acc + self.cell_boundary(cell).scalar_mul(coef.clone())
+        })
+    }
+
+    /// Return the coboundary chain of a cell as a module element subject to the
+    /// predicate `p` on the cell's cofaces.
+    ///
+    /// The coboundary of a cell is a formal linear combination of cells that
+    /// have this cell as a face.
+    fn cell_coboundary_if(
+        &self,
+        cell: &Self::Cell,
+        predicate: impl Fn(&Self::Cell) -> bool,
+    ) -> Self::Module;
+
+    /// Compute the coboundary of a cochain (formal linear combination of cells)
+    /// with a predicate `p` to filter which coboundary cells are included.
+    ///
+    /// This is a provided method that applies the predicate to each coboundary
+    /// cell before including it in the result.
+    fn coboundary_if(
+        &self,
+        chain: &Self::Module,
+        predicate: impl Fn(&Self::Cell) -> bool,
+    ) -> Self::Module {
+        chain.iter().fold(Self::Module::new(), |acc, (cell, coef)| {
+            acc + self
+                .cell_coboundary_if(cell, &predicate)
+                .scalar_mul(coef.clone())
         })
     }
 
     /// Return the coboundary chain of a cell as a module element.
     ///
-    /// The coboundary of a cell is a formal linear combination of cells that
-    /// have this cell as a face.
-    fn coboundary_of_cell(&self, cell: &Self::Cell) -> Self::Module;
+    /// This is a provided method that calls `cell_coboundary_if` with a
+    /// predicate that accepts all cells.
+    fn cell_coboundary(&self, cell: &Self::Cell) -> Self::Module {
+        self.cell_coboundary_if(cell, |_| true)
+    }
 
     /// A provided method to compute the coboundary of a cochain (formal linear
     /// combination of cells) using the required `coboundary_of_cell` method.
@@ -52,7 +112,7 @@ pub trait ComplexLike {
         cochain
             .iter()
             .fold(Self::Module::new(), |acc, (cell, coef)| {
-                acc + self.coboundary_of_cell(cell).scalar_mul(coef.clone())
+                acc + self.cell_coboundary(cell).scalar_mul(coef.clone())
             })
     }
 

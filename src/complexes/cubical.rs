@@ -67,8 +67,8 @@
 //! let complex: CubicalComplex<HashMapModule<Cube, Cyclic<5>>, _> =
 //!     CubicalComplex::new(min, max, grader);
 //!
-//! assert_eq!(complex.boundary_of_cell(&vertex), HashMapModule::new());
-//! assert_eq!(complex.boundary_of_cell(&edge), HashMapModule::from([(vertex, -Cyclic::one())]));
+//! assert_eq!(complex.cell_boundary(&vertex), HashMapModule::new());
+//! assert_eq!(complex.cell_boundary(&edge), HashMapModule::from([(vertex, -Cyclic::one())]));
 //! ```
 
 use std::fmt;
@@ -458,7 +458,7 @@ impl Display for Cube {
 /// // Use the complex for homological computations
 /// assert_eq!(complex.dimension(), 2);
 /// assert!(complex.contains_cube(&vertex));
-/// let boundary = complex.boundary_of_cell(&vertex);
+/// let boundary = complex.cell_boundary(&vertex);
 /// ```
 #[derive(Clone, Debug)]
 pub struct CubicalComplex<M, G> {
@@ -536,7 +536,7 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
     type Module = M;
     type Ring = R;
 
-    fn boundary_of_cell(&self, cell: &Cube) -> M {
+    fn cell_boundary_if(&self, cell: &Cube, predicate: impl Fn(&Cube) -> bool) -> M {
         debug_assert!(
             self.contains_cube(cell),
             "Cube is not in the complex bounds"
@@ -558,13 +558,17 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
                 outer_base[axis] += 1;
                 if *base_coord < self.maximum()[axis] {
                     let outer_cube = Cube::new(outer_base, cell.dual().clone());
-                    result.insert_or_add(&outer_cube, coef.clone());
+                    if predicate(&outer_cube) {
+                        result.insert_or_add(&outer_cube, coef.clone());
+                    }
                 }
 
                 let mut inner_dual = cell.dual().clone();
                 inner_dual[axis] -= 1;
                 let inner_cube = Cube::new(cell.base().clone(), inner_dual);
-                result.insert_or_add(&inner_cube, -coef.clone());
+                if predicate(&inner_cube) {
+                    result.insert_or_add(&inner_cube, -coef.clone());
+                }
 
                 coef = -coef;
             }
@@ -573,7 +577,7 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
         result
     }
 
-    fn coboundary_of_cell(&self, cell: &Cube) -> M {
+    fn cell_coboundary_if(&self, cell: &Cube, predicate: impl Fn(&Cube) -> bool) -> M {
         debug_assert!(
             self.contains_cube(cell),
             "Cube is not in the complex bounds"
@@ -594,13 +598,17 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
                 let mut outer_dual = cell.dual().clone();
                 outer_dual[axis] += 1;
                 let outer_cube = Cube::new(cell.base().clone(), outer_dual);
-                result.insert_or_add(&outer_cube, coef.clone());
+                if predicate(&outer_cube) {
+                    result.insert_or_add(&outer_cube, coef.clone());
+                }
 
                 let mut inner_base = cell.base().clone();
                 inner_base[axis] -= 1;
                 if *base_coord > self.minimum()[axis] {
                     let inner_cube = Cube::new(inner_base, cell.dual().clone());
-                    result.insert_or_add(&inner_cube, -coef.clone());
+                    if predicate(&inner_cube) {
+                        result.insert_or_add(&inner_cube, -coef.clone());
+                    }
                 }
 
                 coef = -coef;
@@ -815,7 +823,7 @@ mod tests {
 
         // Test boundary of a 1-cube (edge) - horizontal edge
         let edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[true, false]);
-        let boundary = complex.boundary_of_cell(&edge);
+        let boundary = complex.cell_boundary(&edge);
         assert_eq!(
             boundary,
             HashMapModule::from([
@@ -826,7 +834,7 @@ mod tests {
 
         // Test coboundary of a 0-cube (vertex)
         let vertex = Cube::vertex(Orthant::new(vec![1, 1]));
-        let coboundary = complex.coboundary_of_cell(&vertex);
+        let coboundary = complex.cell_coboundary(&vertex);
         assert_eq!(
             coboundary,
             HashMapModule::from([
@@ -917,7 +925,7 @@ mod tests {
         assert_eq!(complex.grade(&cube_3d), 9); // Direct grade from orthant (1,1,1)
 
         // Test boundary relations (vertex has empty boundary)
-        let vertex_boundary: HashMapModule<Cube, Cyclic<7>> = complex.boundary_of_cell(&vertex);
+        let vertex_boundary: HashMapModule<Cube, Cyclic<7>> = complex.cell_boundary(&vertex);
         assert_eq!(vertex_boundary, HashMapModule::new());
 
         // Test that all cubes are contained
@@ -1062,5 +1070,147 @@ mod tests {
         let contains_expected_edges = coboundary_vertices.contains(&horizontal_edge)
             || coboundary_vertices.contains(&vertical_edge);
         assert!(contains_expected_edges);
+    }
+
+    #[test]
+    fn test_cell_boundary_if_with_predicate() {
+        let min = Orthant::new(vec![0, 0]);
+        let max = Orthant::new(vec![2, 2]);
+
+        let mut orthant_grades = HashMap::new();
+        orthant_grades.insert(Orthant::new(vec![0, 0]), 4);
+        orthant_grades.insert(Orthant::new(vec![1, 0]), 2);
+        orthant_grades.insert(Orthant::new(vec![0, 1]), 3);
+        orthant_grades.insert(Orthant::new(vec![1, 1]), 1);
+        let orthant_grader = HashMapGrader::from_map(orthant_grades);
+        let grader = TopCubeGrader::new(orthant_grader, Some(1));
+
+        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
+            CubicalComplex::new(min, max, grader);
+
+        // Test boundary of horizontal edge with predicate that only includes vertices
+        // at x=1
+        let horizontal_edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[true, false]);
+        let boundary_filtered =
+            complex.cell_boundary_if(&horizontal_edge, |cube| cube.base()[0] == 1);
+
+        // Only vertex(1,1) should be included, not vertex(2,1)
+        let vertex_11 = Cube::vertex(Orthant::new(vec![1, 1]));
+        let mut expected = HashMapModule::new();
+        expected.insert_or_add(&vertex_11, -Cyclic::one());
+
+        assert_eq!(boundary_filtered, expected);
+    }
+
+    #[test]
+    fn test_boundary_if_with_predicate() {
+        let min = Orthant::new(vec![0, 0]);
+        let max = Orthant::new(vec![2, 2]);
+
+        let mut orthant_grades = HashMap::new();
+        orthant_grades.insert(Orthant::new(vec![0, 0]), 4);
+        orthant_grades.insert(Orthant::new(vec![1, 0]), 2);
+        orthant_grades.insert(Orthant::new(vec![0, 1]), 3);
+        orthant_grades.insert(Orthant::new(vec![1, 1]), 1);
+        let orthant_grader = HashMapGrader::from_map(orthant_grades);
+        let grader = TopCubeGrader::new(orthant_grader, Some(1));
+
+        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
+            CubicalComplex::new(min, max, grader);
+
+        let horizontal_edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[true, false]);
+        let vertical_edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[false, true]);
+
+        let mut edge_chain = HashMapModule::new();
+        edge_chain.insert_or_add(&horizontal_edge, Cyclic::one());
+        edge_chain.insert_or_add(&vertical_edge, Cyclic::one());
+
+        // Compute boundary with predicate that only includes vertices with y=1
+        let boundary_filtered = complex.boundary_if(&edge_chain, |cube| cube.base()[1] == 1);
+
+        // Should include vertex(1,1) from both edges and vertex(2,1) from horizontal
+        // edge
+        let vertex_11 = Cube::vertex(Orthant::new(vec![1, 1]));
+        let vertex_21 = Cube::vertex(Orthant::new(vec![2, 1]));
+
+        let mut expected = HashMapModule::new();
+        expected.insert_or_add(&vertex_11, Cyclic::from(5)); // -1 + -1 = -2 = 5 (mod 7)
+        expected.insert_or_add(&vertex_21, Cyclic::one());
+
+        assert_eq!(boundary_filtered, expected);
+    }
+
+    #[test]
+    fn test_cell_coboundary_if_with_predicate() {
+        let min = Orthant::new(vec![0, 0]);
+        let max = Orthant::new(vec![2, 2]);
+
+        let mut orthant_grades = HashMap::new();
+        orthant_grades.insert(Orthant::new(vec![0, 0]), 4);
+        orthant_grades.insert(Orthant::new(vec![1, 0]), 2);
+        orthant_grades.insert(Orthant::new(vec![0, 1]), 3);
+        orthant_grades.insert(Orthant::new(vec![1, 1]), 1);
+        let orthant_grader = HashMapGrader::from_map(orthant_grades);
+        let grader = TopCubeGrader::new(orthant_grader, Some(1));
+
+        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
+            CubicalComplex::new(min, max, grader);
+
+        // Test coboundary of vertex with predicate that only includes horizontal edges
+        let vertex = Cube::vertex(Orthant::new(vec![1, 1]));
+        let coboundary_filtered =
+            complex.cell_coboundary_if(&vertex, |cube| cube.extent() == vec![true, false]);
+
+        // Should only include horizontal edges that have this vertex as a face
+        let horizontal_edge1 = Cube::new(Orthant::new(vec![1, 1]), Orthant::new(vec![1, 0]));
+        let horizontal_edge2 = Cube::new(Orthant::new(vec![0, 1]), Orthant::new(vec![0, 0]));
+
+        // Check that only horizontal edges are included
+        for (cube, _) in coboundary_filtered.iter() {
+            assert_eq!(cube.extent(), vec![true, false]);
+        }
+
+        // Should contain at least the expected horizontal edges
+        assert!(
+            coboundary_filtered.coef(&horizontal_edge1) != Cyclic::zero()
+                || coboundary_filtered.coef(&horizontal_edge2) != Cyclic::zero()
+        );
+    }
+
+    #[test]
+    fn test_coboundary_if_with_predicate() {
+        let min = Orthant::new(vec![0, 0]);
+        let max = Orthant::new(vec![2, 2]);
+
+        let mut orthant_grades = HashMap::new();
+        orthant_grades.insert(Orthant::new(vec![0, 0]), 4);
+        orthant_grades.insert(Orthant::new(vec![1, 0]), 2);
+        orthant_grades.insert(Orthant::new(vec![0, 1]), 3);
+        orthant_grades.insert(Orthant::new(vec![1, 1]), 1);
+        let orthant_grader = HashMapGrader::from_map(orthant_grades);
+        let grader = TopCubeGrader::new(orthant_grader, Some(1));
+
+        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
+            CubicalComplex::new(min, max, grader);
+
+        let vertex_11 = Cube::vertex(Orthant::new(vec![1, 1]));
+        let vertex_21 = Cube::vertex(Orthant::new(vec![2, 1]));
+
+        let mut vertex_chain = HashMapModule::new();
+        vertex_chain.insert_or_add(&vertex_11, Cyclic::one());
+        vertex_chain.insert_or_add(&vertex_21, Cyclic::one());
+
+        // Compute coboundary with predicate that only includes vertical edges
+        let coboundary_filtered =
+            complex.coboundary_if(&vertex_chain, |cube| cube.extent() == vec![false, true]);
+
+        // Check that only vertical edges are included in the result
+        for (cube, _) in coboundary_filtered.iter() {
+            assert_eq!(cube.extent(), vec![false, true]);
+        }
+
+        // The result should be non-empty since these vertices should have vertical
+        // edges in their coboundaries
+        assert!(coboundary_filtered != HashMapModule::new());
     }
 }
