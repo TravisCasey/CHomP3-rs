@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 /// Helper trait for types that support additive operations.
@@ -14,7 +15,7 @@ pub trait Additive:
 pub trait Multiplicative: Sized + Mul<Output = Self> + MulAssign {}
 
 /// Helper trait for basic algebraic structure requirements.
-pub trait AlgebraicBase: Sized + Clone + Eq {}
+pub trait AlgebraicBase: Sized + Clone + Eq + Debug {}
 
 impl<T> Additive for T where
     T: Add<Output = Self> + AddAssign + Sub<Output = Self> + SubAssign + Neg<Output = Self>
@@ -23,7 +24,7 @@ impl<T> Additive for T where
 
 impl<T> Multiplicative for T where T: Mul<Output = Self> + MulAssign {}
 
-impl<T> AlgebraicBase for T where T: Sized + Clone + Eq {}
+impl<T> AlgebraicBase for T where T: Sized + Clone + Eq + Debug {}
 
 /// Expected functionality for coefficient rings throughout `chomp3rs`. These
 /// coefficient rings are expected to be integral domains with unity, though
@@ -33,21 +34,16 @@ pub trait RingLike: AlgebraicBase + Additive + Multiplicative {
     fn zero() -> Self;
     /// Creates a new ring element representing the multiplicative identity.
     fn one() -> Self;
-}
-
-/// A type satisfying `FieldLike` is a ring in which every nonzero value is
-/// invertible; this inverse is fetched by the prescribed `invert` method.
-pub trait FieldLike: RingLike {
-    /// Return the multiplicative inverse of `self`. Should not be called on the
-    /// zero element of the ring `Self` (i.e. `Self::zero()`) and may panic
-    /// if done so. Otherwise, the method is expected to return correctly.
+    /// Return the multiplicative inverse of `self`, for thos values at which it
+    /// exists. It is good practice to panic if the inverse does not exist
+    /// (i.e. at the zero element).
     fn invert(&self) -> Self;
 }
 
 /// The expected functionality for types implementing algebraic modules over the
 /// coefficient ring `R`. Objects of a type satisfying `ModuleLike` represent
 /// `R`-linear combinations of objects of the basis type `C`.
-pub trait ModuleLike: AlgebraicBase + Additive + FromIterator<(Self::Cell, Self::Ring)> {
+pub trait ModuleLike: AlgebraicBase + Additive + FromIterator<(Self::Cell, Self::Ring)> + IntoIterator<Item = (Self::Cell, Self::Ring)> {
     /// The type of the basis elements of the module.
     type Cell;
     /// Coefficient type applied to cells in the module.

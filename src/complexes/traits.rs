@@ -12,7 +12,7 @@ use crate::{ModuleLike, RingLike};
 pub trait ComplexLike {
     /// Cell type of the complex. Must be equivalent to
     /// `<Self::Module as ModuleLike>::Cell`
-    type Cell;
+    type Cell: Clone + Eq;
 
     /// Ring type of chains emitted by the complex. Must be equivalent to
     /// `<Self::Module as ModuleLike>::Ring`

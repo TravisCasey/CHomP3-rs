@@ -9,12 +9,14 @@
 #![warn(missing_docs)]
 
 pub use crate::algebra::{
-    Additive, AlgebraicBase, Cyclic, FieldLike, HashMapModule, ModuleLike, Multiplicative, RingLike,
+    Additive, AlgebraicBase, Cyclic, HashMapModule, ModuleLike, Multiplicative, RingLike,
 };
 pub use crate::complexes::{
     CellComplex, ComplexLike, Cube, CubeIterator, CubicalComplex, Grader, HashMapGrader, Orthant,
     OrthantIterator, TopCubeGrader,
 };
+pub use crate::homology::{MatchResult, MorseMatching};
 
 mod algebra;
 mod complexes;
+mod homology;

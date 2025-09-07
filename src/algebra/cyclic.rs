@@ -11,7 +11,7 @@ use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use flint_sys::nmod_vec::{nmod_add, nmod_init, nmod_inv, nmod_mul, nmod_neg, nmod_sub, nmod_t};
 
-use crate::algebra::traits::{FieldLike, RingLike};
+use crate::algebra::traits::RingLike;
 
 /// The field of integers modulo `MOD`, for prime modulus values `MOD`.
 ///
@@ -76,9 +76,7 @@ impl<const MOD: u64> RingLike for Cyclic<MOD> {
     fn one() -> Self {
         Self::new(1)
     }
-}
 
-impl<const MOD: u64> FieldLike for Cyclic<MOD> {
     fn invert(&self) -> Self {
         assert!(
             self.remainder != 0,

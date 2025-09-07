@@ -84,7 +84,7 @@ use crate::{ModuleLike, RingLike};
 /// assert_eq!(module.coef(&1), Cyclic::from(4)); // 2 * 2 = 4 (mod 4)
 /// assert_eq!(module.coef(&2), Cyclic::from(1)); // 3 * 2 = 6 = 1 (mod 5)
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HashMapModule<B, R, H = RandomState> {
     map: HashMap<B, R, H>,
 }
@@ -98,7 +98,7 @@ impl<B, R, H: Default> HashMapModule<B, R, H> {
     }
 }
 
-impl<B: Clone + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone> ModuleLike
+impl<B: Clone + Debug + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone> ModuleLike
     for HashMapModule<B, R, H>
 {
     type Cell = B;
@@ -172,6 +172,12 @@ where
             }
         }
         Ok(())
+    }
+}
+
+impl<B: Debug, R: Debug, H> Debug for HashMapModule<B, R, H> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "{:?}", self.map)
     }
 }
 
@@ -282,6 +288,19 @@ where
         Self {
             map: HashMap::<B, R, H>::from_iter(items),
         }
+    }
+}
+
+impl<B, R, H> IntoIterator for HashMapModule<B, R, H> 
+where
+    B: Eq + Hash,
+    H: BuildHasher + Default,
+{
+    type Item = (B, R);
+    type IntoIter = std::collections::hash_map::IntoIter<B, R>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.map.into_iter()
     }
 }
 
