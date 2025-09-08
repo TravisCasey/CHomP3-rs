@@ -90,7 +90,7 @@ where
         }
     }
 
-    fn get_complex(&self) -> &Self::UpperComplex {
+    fn get_upper_complex(&self) -> &Self::UpperComplex {
         &self.complex
     }
 
@@ -508,7 +508,7 @@ mod tests {
             matching
                 .critical_cells()
                 .iter()
-                .filter(|cell| matching.get_complex().grade(cell) == 0)
+                .filter(|cell| matching.get_upper_complex().grade(cell) == 0)
                 .count(),
             1
         );
@@ -573,7 +573,7 @@ mod tests {
                 .critical_cells
                 .iter()
                 .filter_map(|cell| {
-                    if matching.get_complex().grade(cell) == 0 {
+                    if matching.get_upper_complex().grade(cell) == 0 {
                         Some(cell.dimension())
                     } else {
                         None

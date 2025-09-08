@@ -5,7 +5,7 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use crate::{ComplexLike, MatchResult, ModuleLike, RingLike};
+use crate::{CellComplex, ComplexLike, MatchResult, ModuleLike, RingLike};
 
 /// The interface for a type implementing an acyclic partial matching used in
 /// discrete Morse theoretic cell complex reductions.
@@ -55,10 +55,40 @@ pub trait MorseMatching {
     /// Compute an acyclic partial matching on the given cell complex,
     /// determining the critical (ace) cells and preparing for construction of
     /// the reduced Morse complex.
-    fn compute_matching(complex: Self::UpperComplex) -> Self;
+    fn compute_matching(complex: Self::UpperComplex) -> Self
+    where
+        Self: Sized; // dyn compatible
+
+    /// Create the Morse complex associated to the acyclic partial matching
+    /// `self`.
+    /// 
+    /// This cell comlex has one cell (of type `u32`) for each critical cell
+    /// found in the matching; these correspond as indices into the vector
+    /// returned from [`MorseMatching::critical_cells`]. Though this library
+    /// does not require the possibility of storing each cell in every complex
+    /// type (particularly, for the `CubicalComplex` type), it is assumed that
+    /// the number of critical cells is relatively low so that the resulting
+    /// [`CellComplex`] object can explicitly store all dimension, grades, and
+    /// (co)boundaries.
+    /// 
+    /// For theoretical background, consult perhaps Forman *A user's guide to
+    /// discrete Morse theory*.
+    fn construct_morse_complex(&self) -> CellComplex<Self::LowerModule> {
+        let critical_cells = self.critical_cells();
+        let cell_dimensions = critical_cells
+            .iter()
+            .map(|cell| self.get_upper_complex().cell_dimension(cell))
+            .collect();
+        let grades = critical_cells
+            .iter()
+            .map(|cell| self.get_upper_complex().grade(cell))
+            .collect();
+        let (boundaries, coboundaries) = self.boundary_and_coboundary();
+        CellComplex::new(cell_dimensions, grades, boundaries, coboundaries)
+    }
 
     /// Return an immutable reference to the owned parent cell complex.
-    fn get_complex(&self) -> &Self::UpperComplex;
+    fn get_upper_complex(&self) -> &Self::UpperComplex;
 
     /// Return the critical cells found by the matching algorithm. These are
     /// primarily used to construct the reduced Morse complex.
@@ -127,8 +157,8 @@ pub trait MorseMatching {
         let mut coboundaries = Vec::with_capacity(critical_cells.len());
 
         for cell in critical_cells.iter() {
-            boundaries.push(self.lower(self.get_complex().cell_boundary(cell)));
-            coboundaries.push(self.lower(self.get_complex().cell_coboundary(cell)));
+            boundaries.push(self.lower(self.get_upper_complex().cell_boundary(cell)));
+            coboundaries.push(self.lower(self.get_upper_complex().cell_coboundary(cell)));
         }
 
         (boundaries, coboundaries)
@@ -209,7 +239,7 @@ pub trait MorseMatching {
 
                 // Compute the scaled boundary of the king
                 boundary_chain = self
-                    .get_complex()
+                    .get_upper_complex()
                     .cell_boundary(&king)
                     .scalar_mul(cancel_coef);
             } else {
@@ -245,7 +275,7 @@ pub trait MorseMatching {
         let mut lifted_chain = self.include(chain);
         // Each queen maps to its king, and the boundary of the king is stored
         // in this chain; the queens of this chain are propagated further.
-        let mut boundary_chain = self.get_complex().boundary(&lifted_chain);
+        let mut boundary_chain = self.get_upper_complex().boundary(&lifted_chain);
 
         // Using Reverse(_) for min heap
         let mut queen_queue = BinaryHeap::new();
@@ -280,7 +310,7 @@ pub trait MorseMatching {
 
                 // Compute the scaled boundary of the king
                 boundary_chain = self
-                    .get_complex()
+                    .get_upper_complex()
                     .cell_boundary(&king)
                     .scalar_mul(cancel_coef.clone());
                 lifted_chain.insert_or_add(king.clone(), cancel_coef);
@@ -364,7 +394,7 @@ pub trait MorseMatching {
 
                 // Compute the scaled coboundary of the queen
                 coboundary_cochain = self
-                    .get_complex()
+                    .get_upper_complex()
                     .cell_coboundary(&queen)
                     .scalar_mul(cancel_coef);
             } else {
@@ -401,7 +431,7 @@ pub trait MorseMatching {
         let mut colifted_cochain = self.include(cochain);
         // Each king maps to its queen, and the coboundary of the queen is stored
         // in this cochain; the kings of this cochain are propagated further.
-        let mut coboundary_cochain = self.get_complex().coboundary(&colifted_cochain);
+        let mut coboundary_cochain = self.get_upper_complex().coboundary(&colifted_cochain);
 
         // Using max heap
         let mut king_queue = BinaryHeap::new();
@@ -436,7 +466,7 @@ pub trait MorseMatching {
 
                 // Compute the scaled coboundary of the queen
                 coboundary_cochain = self
-                    .get_complex()
+                    .get_upper_complex()
                     .cell_coboundary(&queen)
                     .scalar_mul(cancel_coef.clone());
                 colifted_cochain.insert_or_add(queen.clone(), cancel_coef);
