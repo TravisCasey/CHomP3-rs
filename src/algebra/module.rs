@@ -44,9 +44,9 @@ use crate::{ModuleLike, RingLike};
 /// let mut module = HashMapModule::<u32, Cyclic<5>>::new();
 ///
 /// // Insert some basis elements with coefficients
-/// module.insert_or_add(&1, Cyclic::from(3));
-/// module.insert_or_add(&2, Cyclic::from(4));
-/// module.insert_or_add(&1, Cyclic::from(3)); // Adds to existing coefficient
+/// module.insert_or_add(1, Cyclic::from(3));
+/// module.insert_or_add(2, Cyclic::from(4));
+/// module.insert_or_add(1, Cyclic::from(3)); // Adds to existing coefficient
 ///
 /// assert_eq!(module.coef(&1), Cyclic::from(1)); // 3 + 3 = 1 (mod 5)
 /// assert_eq!(module.coef(&2), Cyclic::from(4));
@@ -139,6 +139,10 @@ impl<B: Clone + Debug + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone
 
     fn iter(&self) -> Self::Iter<'_> {
         self.map.iter().filter(|&(_cell, coef)| *coef != R::zero())
+    }
+
+    fn insert_or_add(&mut self, cell: Self::Cell, coef: Self::Ring) {
+        *self.map.entry(cell).or_insert_with(|| R::zero()) += coef;
     }
 }
 
@@ -291,13 +295,13 @@ where
     }
 }
 
-impl<B, R, H> IntoIterator for HashMapModule<B, R, H> 
+impl<B, R, H> IntoIterator for HashMapModule<B, R, H>
 where
     B: Eq + Hash,
     H: BuildHasher + Default,
 {
-    type Item = (B, R);
     type IntoIter = std::collections::hash_map::IntoIter<B, R>;
+    type Item = (B, R);
 
     fn into_iter(self) -> Self::IntoIter {
         self.map.into_iter()
@@ -367,13 +371,13 @@ mod tests {
         rs_module: &mut HashMapModule<u32, Cyclic<5>>,
         sh_module: &mut HashMapModule<(u16, u16), Cyclic<31>, SimpleHashBuilder>,
     ) {
-        rs_module.insert_or_add(&0, Cyclic::from(2));
-        rs_module.insert_or_add(&10, Cyclic::from(0));
-        rs_module.insert_or_add(&12, Cyclic::from(4));
+        rs_module.insert_or_add(0, Cyclic::from(2));
+        rs_module.insert_or_add(10, Cyclic::from(0));
+        rs_module.insert_or_add(12, Cyclic::from(4));
 
-        sh_module.insert_or_add(&(13, 0), Cyclic::from(21));
-        sh_module.insert_or_add(&(2, 25), Cyclic::from(4));
-        sh_module.insert_or_add(&(17, 17), Cyclic::from(0));
+        sh_module.insert_or_add((13, 0), Cyclic::from(21));
+        sh_module.insert_or_add((2, 25), Cyclic::from(4));
+        sh_module.insert_or_add((17, 17), Cyclic::from(0));
     }
 
     #[test]
@@ -408,10 +412,10 @@ mod tests {
         let old_rs_module = rs_module.clone();
         let old_sh_module = sh_module.clone();
 
-        rs_module.insert_or_add(&13, Cyclic::from(1)); // new
-        rs_module.insert_or_add(&12, Cyclic::from(2)); // add to existing
-        sh_module.insert_or_add(&(8, 90), Cyclic::from(10)); // new
-        sh_module.insert_or_add(&(17, 17), Cyclic::from(18)); // add to existing
+        rs_module.insert_or_add(13, Cyclic::from(1)); // new
+        rs_module.insert_or_add(12, Cyclic::from(2)); // add to existing
+        sh_module.insert_or_add((8, 90), Cyclic::from(10)); // new
+        sh_module.insert_or_add((17, 17), Cyclic::from(18)); // add to existing
 
         assert_ne!(rs_module, old_rs_module);
         assert_ne!(sh_module, old_sh_module);
@@ -585,7 +589,7 @@ mod tests {
         ]);
 
         // Add a zero coefficient entry to test filtering
-        module.insert_or_add(&5, Cyclic::from(0));
+        module.insert_or_add(5, Cyclic::from(0));
 
         let mut collected: Vec<_> = module.iter().map(|(cell, coef)| (*cell, *coef)).collect();
         collected.sort_by_key(|(cell, _)| *cell);

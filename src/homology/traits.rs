@@ -84,7 +84,7 @@ pub trait MorseMatching {
         let mut projected_chain = Self::LowerModule::new();
         for (cell, coefficient) in chain.into_iter() {
             if let Some(projected_cell) = self.project_cell(cell) {
-                projected_chain.insert_or_add(&projected_cell, coefficient);
+                projected_chain.insert_or_add(projected_cell, coefficient);
             }
         }
         projected_chain
@@ -110,7 +110,7 @@ pub trait MorseMatching {
     fn include(&self, chain: Self::LowerModule) -> Self::UpperModule {
         let mut included_chain = Self::UpperModule::new();
         for (cell, coefficient) in chain.into_iter() {
-            included_chain.insert_or_add(&self.include_cell(cell), coefficient);
+            included_chain.insert_or_add(self.include_cell(cell), coefficient);
         }
         included_chain
     }
@@ -175,13 +175,12 @@ pub trait MorseMatching {
                 let match_result = self.match_cell(&cell);
                 match match_result {
                     MatchResult::Queen { .. } => {
-                        queen_chain.insert_or_add(&cell, coef);
+                        queen_chain.insert_or_add(cell, coef);
                         queen_queue.push(Reverse(match_result));
                     }
                     MatchResult::Ace { .. } => {
                         lowered_chain.insert_or_add(
-                            &self
-                                .project_cell(cell)
+                            self.project_cell(cell)
                                 .expect("project_cell returned None on critical cell"),
                             coef,
                         );
@@ -229,7 +228,7 @@ pub trait MorseMatching {
     /// `cell` is treated as a singleton chain with a coefficient of one.
     fn lower_cell(&self, cell: Self::UpperCell) -> Self::LowerModule {
         let mut cell_chain = Self::UpperModule::new();
-        cell_chain.insert_or_add(&cell, Self::Ring::one());
+        cell_chain.insert_or_add(cell, Self::Ring::one());
         self.lower(cell_chain)
     }
 
@@ -256,7 +255,7 @@ pub trait MorseMatching {
             for (cell, coef) in boundary_chain {
                 let match_result = self.match_cell(&cell);
                 if let MatchResult::Queen { .. } = match_result {
-                    queen_chain.insert_or_add(&cell, coef);
+                    queen_chain.insert_or_add(cell, coef);
                     queen_queue.push(Reverse(match_result));
                 }
             }
@@ -284,7 +283,7 @@ pub trait MorseMatching {
                     .get_complex()
                     .cell_boundary(king)
                     .scalar_mul(cancel_coef.clone());
-                lifted_chain.insert_or_add(king, cancel_coef);
+                lifted_chain.insert_or_add(king.clone(), cancel_coef);
             } else {
                 break;
             }
@@ -301,7 +300,7 @@ pub trait MorseMatching {
     /// `cell` is treated as a singleton chain with a coefficient of one.
     fn lift_cell(&self, cell: u32) -> Self::UpperModule {
         let mut cell_chain = Self::LowerModule::new();
-        cell_chain.insert_or_add(&cell, Self::Ring::one());
+        cell_chain.insert_or_add(cell, Self::Ring::one());
         self.lift(cell_chain)
     }
 
@@ -331,13 +330,12 @@ pub trait MorseMatching {
                 let match_result = self.match_cell(&cell);
                 match match_result {
                     MatchResult::King { .. } => {
-                        king_cochain.insert_or_add(&cell, coef);
+                        king_cochain.insert_or_add(cell, coef);
                         king_queue.push(match_result);
                     }
                     MatchResult::Ace { .. } => {
                         colowered_cochain.insert_or_add(
-                            &self
-                                .project_cell(cell)
+                            self.project_cell(cell)
                                 .expect("project_cell returned None on critical cell"),
                             coef,
                         );
@@ -385,7 +383,7 @@ pub trait MorseMatching {
     /// `cell` is treated as a singleton cochain with a coefficient of one.
     fn colower_cell(&self, cell: Self::UpperCell) -> Self::LowerModule {
         let mut cell_cochain = Self::UpperModule::new();
-        cell_cochain.insert_or_add(&cell, Self::Ring::one());
+        cell_cochain.insert_or_add(cell, Self::Ring::one());
         self.colower(cell_cochain)
     }
 
@@ -413,7 +411,7 @@ pub trait MorseMatching {
             for (cell, coef) in coboundary_cochain {
                 let match_result = self.match_cell(&cell);
                 if let MatchResult::King { .. } = match_result {
-                    king_cochain.insert_or_add(&cell, coef);
+                    king_cochain.insert_or_add(cell, coef);
                     king_queue.push(match_result);
                 }
             }
@@ -441,7 +439,7 @@ pub trait MorseMatching {
                     .get_complex()
                     .cell_coboundary(queen)
                     .scalar_mul(cancel_coef.clone());
-                colifted_cochain.insert_or_add(queen, cancel_coef);
+                colifted_cochain.insert_or_add(queen.clone(), cancel_coef);
             } else {
                 break;
             }
@@ -458,7 +456,7 @@ pub trait MorseMatching {
     /// `cell` is treated as a singleton cochain with a coefficient of one.
     fn colift_cell(&self, cell: u32) -> Self::UpperModule {
         let mut cell_cochain = Self::LowerModule::new();
-        cell_cochain.insert_or_add(&cell, Self::Ring::one());
+        cell_cochain.insert_or_add(cell, Self::Ring::one());
         self.colift(cell_cochain)
     }
 }

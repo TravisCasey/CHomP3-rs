@@ -144,14 +144,14 @@ mod tests {
 
         let mut boundaries = vec![TestModule::new(), TestModule::new(), TestModule::new()];
         // Boundary of edge (cell 2) is vertex1 - vertex0
-        boundaries[2].insert_or_add(&1, Cyclic::one());
-        boundaries[2].insert_or_add(&0, -Cyclic::one());
+        boundaries[2].insert_or_add(1, Cyclic::one());
+        boundaries[2].insert_or_add(0, -Cyclic::one());
 
         let mut coboundaries = vec![TestModule::new(), TestModule::new(), TestModule::new()];
         // Coboundary of vertex 0 includes the edge with coefficient -1
-        coboundaries[0].insert_or_add(&2, -Cyclic::one());
+        coboundaries[0].insert_or_add(2, -Cyclic::one());
         // Coboundary of vertex 1 includes the edge with coefficient +1
-        coboundaries[1].insert_or_add(&2, Cyclic::one());
+        coboundaries[1].insert_or_add(2, Cyclic::one());
 
         CellComplex::new(cell_dimensions, grades, boundaries, coboundaries)
     }
@@ -163,32 +163,32 @@ mod tests {
         let grades = vec![0, 0, 0, 1, 1, 1, 2];
 
         let mut boundaries = vec![TestModule::new(); 7];
-        boundaries[3].insert_or_add(&1, Cyclic::one()); // edge 0->1
-        boundaries[3].insert_or_add(&0, -Cyclic::one());
+        boundaries[3].insert_or_add(1, Cyclic::one()); // edge 0->1
+        boundaries[3].insert_or_add(0, -Cyclic::one());
 
-        boundaries[4].insert_or_add(&2, Cyclic::one()); // edge 1->2
-        boundaries[4].insert_or_add(&1, -Cyclic::one());
+        boundaries[4].insert_or_add(2, Cyclic::one()); // edge 1->2
+        boundaries[4].insert_or_add(1, -Cyclic::one());
 
-        boundaries[5].insert_or_add(&0, Cyclic::one()); // edge 2->0
-        boundaries[5].insert_or_add(&2, -Cyclic::one());
+        boundaries[5].insert_or_add(0, Cyclic::one()); // edge 2->0
+        boundaries[5].insert_or_add(2, -Cyclic::one());
 
-        boundaries[6].insert_or_add(&3, Cyclic::one()); // +edge(0->1)
-        boundaries[6].insert_or_add(&4, Cyclic::one()); // +edge(1->2)
-        boundaries[6].insert_or_add(&5, Cyclic::one()); // +edge(2->0)
+        boundaries[6].insert_or_add(3, Cyclic::one()); // +edge(0->1)
+        boundaries[6].insert_or_add(4, Cyclic::one()); // +edge(1->2)
+        boundaries[6].insert_or_add(5, Cyclic::one()); // +edge(2->0)
 
         let mut coboundaries = vec![TestModule::new(); 7];
-        coboundaries[0].insert_or_add(&3, -Cyclic::one());
-        coboundaries[0].insert_or_add(&5, Cyclic::one());
+        coboundaries[0].insert_or_add(3, -Cyclic::one());
+        coboundaries[0].insert_or_add(5, Cyclic::one());
 
-        coboundaries[1].insert_or_add(&4, -Cyclic::one());
-        coboundaries[1].insert_or_add(&3, Cyclic::one());
+        coboundaries[1].insert_or_add(4, -Cyclic::one());
+        coboundaries[1].insert_or_add(3, Cyclic::one());
 
-        coboundaries[2].insert_or_add(&5, -Cyclic::one());
-        coboundaries[2].insert_or_add(&4, Cyclic::one());
+        coboundaries[2].insert_or_add(5, -Cyclic::one());
+        coboundaries[2].insert_or_add(4, Cyclic::one());
 
-        coboundaries[3].insert_or_add(&6, Cyclic::one());
-        coboundaries[4].insert_or_add(&6, Cyclic::one());
-        coboundaries[5].insert_or_add(&6, Cyclic::one());
+        coboundaries[3].insert_or_add(6, Cyclic::one());
+        coboundaries[4].insert_or_add(6, Cyclic::one());
+        coboundaries[5].insert_or_add(6, Cyclic::one());
 
         CellComplex::new(cell_dimensions, grades, boundaries, coboundaries)
     }
@@ -290,9 +290,9 @@ mod tests {
         // Create a chain that is a linear combination of edges: 2*edge3 + 3*edge4 -
         // edge5
         let mut edge_chain = TestModule::new();
-        edge_chain.insert_or_add(&3, Cyclic::from(2)); // 2 * edge(0->1)
-        edge_chain.insert_or_add(&4, Cyclic::from(3)); // 3 * edge(1->2)
-        edge_chain.insert_or_add(&5, -Cyclic::one()); // -1 * edge(2->0)
+        edge_chain.insert_or_add(3, Cyclic::from(2)); // 2 * edge(0->1)
+        edge_chain.insert_or_add(4, Cyclic::from(3)); // 3 * edge(1->2)
+        edge_chain.insert_or_add(5, -Cyclic::one()); // -1 * edge(2->0)
 
         // Compute boundary of the chain using BoundaryComputer trait
         let chain_boundary = complex.boundary(&edge_chain);
@@ -302,9 +302,9 @@ mod tests {
         // = 2*vertex1 - 2*vertex0 + 3*vertex2 - 3*vertex1 - vertex0 + vertex2
         // = -3*vertex0 - vertex1 + 4*vertex2
         let mut expected_boundary = TestModule::new();
-        expected_boundary.insert_or_add(&0, Cyclic::from(2)); // -3 = 2 (mod 5)
-        expected_boundary.insert_or_add(&1, Cyclic::from(4)); // -1 = 4 (mod 5)
-        expected_boundary.insert_or_add(&2, Cyclic::from(4)); // 4 = 4 (mod 5)
+        expected_boundary.insert_or_add(0, Cyclic::from(2)); // -3 = 2 (mod 5)
+        expected_boundary.insert_or_add(1, Cyclic::from(4)); // -1 = 4 (mod 5)
+        expected_boundary.insert_or_add(2, Cyclic::from(4)); // 4 = 4 (mod 5)
 
         assert_eq!(chain_boundary, expected_boundary);
     }
@@ -318,7 +318,7 @@ mod tests {
         let edge_boundary_filtered = complex.cell_boundary_if(&3, |cell| *cell == 1);
 
         let mut expected = TestModule::new();
-        expected.insert_or_add(&1, Cyclic::one()); // Only vertex1 should be included
+        expected.insert_or_add(1, Cyclic::one()); // Only vertex1 should be included
 
         assert_eq!(edge_boundary_filtered, expected);
     }
@@ -329,16 +329,16 @@ mod tests {
 
         // Create a chain of edges: edge3 + edge4
         let mut edge_chain = TestModule::new();
-        edge_chain.insert_or_add(&3, Cyclic::one()); // edge(0->1)
-        edge_chain.insert_or_add(&4, Cyclic::one()); // edge(1->2)
+        edge_chain.insert_or_add(3, Cyclic::one()); // edge(0->1)
+        edge_chain.insert_or_add(4, Cyclic::one()); // edge(1->2)
 
         // Compute boundary with predicate that only includes vertices 0 and 2
         let chain_boundary_filtered =
             complex.boundary_if(&edge_chain, |cell| *cell == 0 || *cell == 2);
 
         let mut expected = TestModule::new();
-        expected.insert_or_add(&0, -Cyclic::one()); // From edge3 boundary
-        expected.insert_or_add(&2, Cyclic::one()); // From edge4 boundary
+        expected.insert_or_add(0, -Cyclic::one()); // From edge3 boundary
+        expected.insert_or_add(2, Cyclic::one()); // From edge4 boundary
 
         assert_eq!(chain_boundary_filtered, expected);
     }
@@ -351,8 +351,8 @@ mod tests {
         let vertex0_coboundary = complex.cell_coboundary(&0);
 
         let mut expected = TestModule::new();
-        expected.insert_or_add(&3, -Cyclic::one()); // edge3 with coefficient -1
-        expected.insert_or_add(&5, Cyclic::one()); // edge5 with coefficient +1
+        expected.insert_or_add(3, -Cyclic::one()); // edge3 with coefficient -1
+        expected.insert_or_add(5, Cyclic::one()); // edge5 with coefficient +1
 
         assert_eq!(vertex0_coboundary, expected);
     }
@@ -365,7 +365,7 @@ mod tests {
         let vertex0_coboundary_filtered = complex.cell_coboundary_if(&0, |cell| *cell == 3);
 
         let mut expected = TestModule::new();
-        expected.insert_or_add(&3, -Cyclic::one()); // Only edge3 should be included
+        expected.insert_or_add(3, -Cyclic::one()); // Only edge3 should be included
 
         assert_eq!(vertex0_coboundary_filtered, expected);
     }
@@ -376,15 +376,15 @@ mod tests {
 
         // Create a chain of vertices: vertex0 + vertex1
         let mut vertex_chain = TestModule::new();
-        vertex_chain.insert_or_add(&0, Cyclic::one());
-        vertex_chain.insert_or_add(&1, Cyclic::one());
+        vertex_chain.insert_or_add(0, Cyclic::one());
+        vertex_chain.insert_or_add(1, Cyclic::one());
 
         // Compute coboundary with predicate that only includes edge 3
         let chain_coboundary_filtered = complex.coboundary_if(&vertex_chain, |cell| *cell == 3);
 
         let mut expected = TestModule::new();
-        expected.insert_or_add(&3, -Cyclic::one()); // From vertex0 coboundary
-        expected.insert_or_add(&3, Cyclic::one()); // From vertex1 coboundary
+        expected.insert_or_add(3, -Cyclic::one()); // From vertex0 coboundary
+        expected.insert_or_add(3, Cyclic::one()); // From vertex1 coboundary
         // These should cancel out to zero
 
         assert_eq!(chain_coboundary_filtered, TestModule::new());
@@ -397,9 +397,9 @@ mod tests {
         // Create a chain that is a linear combination of vertices: vertex0 + 2*vertex1
         // - vertex2
         let mut vertex_chain = TestModule::new();
-        vertex_chain.insert_or_add(&0, Cyclic::one());
-        vertex_chain.insert_or_add(&1, Cyclic::from(2));
-        vertex_chain.insert_or_add(&2, -Cyclic::one());
+        vertex_chain.insert_or_add(0, Cyclic::one());
+        vertex_chain.insert_or_add(1, Cyclic::from(2));
+        vertex_chain.insert_or_add(2, -Cyclic::one());
 
         // Compute coboundary of the chain using CoboundaryComputer trait
         let chain_coboundary = complex.coboundary(&vertex_chain);
@@ -412,9 +412,9 @@ mod tests {
         //      = -edge3 + edge5 - 2*edge4 + 2*edge3 + edge5 - edge4
         //      = edge3 + 2*edge5 - 3*edge4
         let mut expected_coboundary = TestModule::new();
-        expected_coboundary.insert_or_add(&3, Cyclic::one());
-        expected_coboundary.insert_or_add(&4, Cyclic::from(2)); // -3 = 2 (mod 5)
-        expected_coboundary.insert_or_add(&5, Cyclic::from(2));
+        expected_coboundary.insert_or_add(3, Cyclic::one());
+        expected_coboundary.insert_or_add(4, Cyclic::from(2)); // -3 = 2 (mod 5)
+        expected_coboundary.insert_or_add(5, Cyclic::from(2));
 
         assert_eq!(chain_coboundary, expected_coboundary);
     }

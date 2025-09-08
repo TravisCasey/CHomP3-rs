@@ -559,7 +559,7 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
                 if *base_coord < self.maximum()[axis] {
                     let outer_cube = Cube::new(outer_base, cell.dual().clone());
                     if predicate(&outer_cube) {
-                        result.insert_or_add(&outer_cube, coef.clone());
+                        result.insert_or_add(outer_cube, coef.clone());
                     }
                 }
 
@@ -567,7 +567,7 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
                 inner_dual[axis] -= 1;
                 let inner_cube = Cube::new(cell.base().clone(), inner_dual);
                 if predicate(&inner_cube) {
-                    result.insert_or_add(&inner_cube, -coef.clone());
+                    result.insert_or_add(inner_cube, -coef.clone());
                 }
 
                 coef = -coef;
@@ -599,7 +599,7 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
                 outer_dual[axis] += 1;
                 let outer_cube = Cube::new(cell.base().clone(), outer_dual);
                 if predicate(&outer_cube) {
-                    result.insert_or_add(&outer_cube, coef.clone());
+                    result.insert_or_add(outer_cube, coef.clone());
                 }
 
                 let mut inner_base = cell.base().clone();
@@ -607,7 +607,7 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
                 if *base_coord > self.minimum()[axis] {
                     let inner_cube = Cube::new(inner_base, cell.dual().clone());
                     if predicate(&inner_cube) {
-                        result.insert_or_add(&inner_cube, -coef.clone());
+                        result.insert_or_add(inner_cube, -coef.clone());
                     }
                 }
 
@@ -997,8 +997,8 @@ mod tests {
         let vertical_edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[false, true]);
 
         let mut edge_chain = HashMapModule::new();
-        edge_chain.insert_or_add(&horizontal_edge, Cyclic::from(2));
-        edge_chain.insert_or_add(&vertical_edge, Cyclic::from(3));
+        edge_chain.insert_or_add(horizontal_edge, Cyclic::from(2));
+        edge_chain.insert_or_add(vertical_edge, Cyclic::from(3));
 
         // Compute boundary of the chain using BoundaryComputer trait
         let chain_boundary = complex.boundary(&edge_chain);
@@ -1041,9 +1041,9 @@ mod tests {
         let vertex_21 = Cube::vertex(Orthant::new(vec![2, 1]));
 
         let mut vertex_chain = HashMapModule::new();
-        vertex_chain.insert_or_add(&vertex_11, Cyclic::one());
-        vertex_chain.insert_or_add(&vertex_12, Cyclic::from(2));
-        vertex_chain.insert_or_add(&vertex_21, -Cyclic::one());
+        vertex_chain.insert_or_add(vertex_11, Cyclic::one());
+        vertex_chain.insert_or_add(vertex_12, Cyclic::from(2));
+        vertex_chain.insert_or_add(vertex_21, -Cyclic::one());
 
         // Compute coboundary of the chain using CoboundaryComputer trait
         let chain_coboundary = complex.coboundary(&vertex_chain);
@@ -1097,7 +1097,7 @@ mod tests {
         // Only vertex(1,1) should be included, not vertex(2,1)
         let vertex_11 = Cube::vertex(Orthant::new(vec![1, 1]));
         let mut expected = HashMapModule::new();
-        expected.insert_or_add(&vertex_11, -Cyclic::one());
+        expected.insert_or_add(vertex_11, -Cyclic::one());
 
         assert_eq!(boundary_filtered, expected);
     }
@@ -1122,8 +1122,8 @@ mod tests {
         let vertical_edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[false, true]);
 
         let mut edge_chain = HashMapModule::new();
-        edge_chain.insert_or_add(&horizontal_edge, Cyclic::one());
-        edge_chain.insert_or_add(&vertical_edge, Cyclic::one());
+        edge_chain.insert_or_add(horizontal_edge, Cyclic::one());
+        edge_chain.insert_or_add(vertical_edge, Cyclic::one());
 
         // Compute boundary with predicate that only includes vertices with y=1
         let boundary_filtered = complex.boundary_if(&edge_chain, |cube| cube.base()[1] == 1);
@@ -1134,8 +1134,8 @@ mod tests {
         let vertex_21 = Cube::vertex(Orthant::new(vec![2, 1]));
 
         let mut expected = HashMapModule::new();
-        expected.insert_or_add(&vertex_11, Cyclic::from(5)); // -1 + -1 = -2 = 5 (mod 7)
-        expected.insert_or_add(&vertex_21, Cyclic::one());
+        expected.insert_or_add(vertex_11, Cyclic::from(5)); // -1 + -1 = -2 = 5 (mod 7)
+        expected.insert_or_add(vertex_21, Cyclic::one());
 
         assert_eq!(boundary_filtered, expected);
     }
@@ -1197,8 +1197,8 @@ mod tests {
         let vertex_21 = Cube::vertex(Orthant::new(vec![2, 1]));
 
         let mut vertex_chain = HashMapModule::new();
-        vertex_chain.insert_or_add(&vertex_11, Cyclic::one());
-        vertex_chain.insert_or_add(&vertex_21, Cyclic::one());
+        vertex_chain.insert_or_add(vertex_11, Cyclic::one());
+        vertex_chain.insert_or_add(vertex_21, Cyclic::one());
 
         // Compute coboundary with predicate that only includes vertical edges
         let coboundary_filtered =

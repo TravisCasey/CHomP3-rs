@@ -45,7 +45,12 @@ pub trait RingLike: AlgebraicBase + Additive + Multiplicative {
 /// The expected functionality for types implementing algebraic modules over the
 /// coefficient ring `R`. Objects of a type satisfying `ModuleLike` represent
 /// `R`-linear combinations of objects of the basis type `C`.
-pub trait ModuleLike: AlgebraicBase + Additive + FromIterator<(Self::Cell, Self::Ring)> + IntoIterator<Item = (Self::Cell, Self::Ring)> {
+pub trait ModuleLike:
+    AlgebraicBase
+    + Additive
+    + FromIterator<(Self::Cell, Self::Ring)>
+    + IntoIterator<Item = (Self::Cell, Self::Ring)>
+{
     /// The type of the basis elements of the module.
     type Cell;
     /// Coefficient type applied to cells in the module.
@@ -79,7 +84,7 @@ pub trait ModuleLike: AlgebraicBase + Additive + FromIterator<(Self::Cell, Self:
 
     /// If `cell` is not in `self`, insert it with coefficient `coef`. Else, add
     /// `coef` to the existing coefficient of `cell` in `self`.
-    fn insert_or_add(&mut self, cell: &Self::Cell, coef: Self::Ring) {
-        *self.coef_mut(cell) += coef
+    fn insert_or_add(&mut self, cell: Self::Cell, coef: Self::Ring) {
+        *self.coef_mut(&cell) += coef
     }
 }

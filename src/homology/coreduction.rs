@@ -387,13 +387,13 @@ mod tests {
 
         let mut boundaries = vec![TestModule::new(), TestModule::new(), TestModule::new()];
         // Edge boundary: vertex1 - vertex0
-        boundaries[2].insert_or_add(&1, Cyclic::one());
-        boundaries[2].insert_or_add(&0, -Cyclic::one());
+        boundaries[2].insert_or_add(1, Cyclic::one());
+        boundaries[2].insert_or_add(0, -Cyclic::one());
 
         let mut coboundaries = vec![TestModule::new(), TestModule::new(), TestModule::new()];
         // Vertex coboundaries
-        coboundaries[0].insert_or_add(&2, -Cyclic::one());
-        coboundaries[1].insert_or_add(&2, Cyclic::one());
+        coboundaries[0].insert_or_add(2, -Cyclic::one());
+        coboundaries[1].insert_or_add(2, Cyclic::one());
 
         let complex = CellComplex::new(cell_dimensions, grades, boundaries, coboundaries);
         let matching = CoreductionMatching::new(complex);
@@ -428,35 +428,35 @@ mod tests {
 
         let mut boundaries = vec![TestModule::new(); 7];
         // Edge boundaries
-        boundaries[3].insert_or_add(&1, Cyclic::one()); // edge 0->1
-        boundaries[3].insert_or_add(&0, -Cyclic::one());
+        boundaries[3].insert_or_add(1, Cyclic::one()); // edge 0->1
+        boundaries[3].insert_or_add(0, -Cyclic::one());
 
-        boundaries[4].insert_or_add(&2, Cyclic::one()); // edge 1->2
-        boundaries[4].insert_or_add(&1, -Cyclic::one());
+        boundaries[4].insert_or_add(2, Cyclic::one()); // edge 1->2
+        boundaries[4].insert_or_add(1, -Cyclic::one());
 
-        boundaries[5].insert_or_add(&0, Cyclic::one()); // edge 2->0
-        boundaries[5].insert_or_add(&2, -Cyclic::one());
+        boundaries[5].insert_or_add(0, Cyclic::one()); // edge 2->0
+        boundaries[5].insert_or_add(2, -Cyclic::one());
 
         // Face boundary
-        boundaries[6].insert_or_add(&3, Cyclic::one());
-        boundaries[6].insert_or_add(&4, Cyclic::one());
-        boundaries[6].insert_or_add(&5, Cyclic::one());
+        boundaries[6].insert_or_add(3, Cyclic::one());
+        boundaries[6].insert_or_add(4, Cyclic::one());
+        boundaries[6].insert_or_add(5, Cyclic::one());
 
         let mut coboundaries = vec![TestModule::new(); 7];
         // Vertex coboundaries
-        coboundaries[0].insert_or_add(&3, -Cyclic::one());
-        coboundaries[0].insert_or_add(&5, Cyclic::one());
+        coboundaries[0].insert_or_add(3, -Cyclic::one());
+        coboundaries[0].insert_or_add(5, Cyclic::one());
 
-        coboundaries[1].insert_or_add(&4, -Cyclic::one());
-        coboundaries[1].insert_or_add(&3, Cyclic::one());
+        coboundaries[1].insert_or_add(4, -Cyclic::one());
+        coboundaries[1].insert_or_add(3, Cyclic::one());
 
-        coboundaries[2].insert_or_add(&5, -Cyclic::one());
-        coboundaries[2].insert_or_add(&4, Cyclic::one());
+        coboundaries[2].insert_or_add(5, -Cyclic::one());
+        coboundaries[2].insert_or_add(4, Cyclic::one());
 
         // Edge coboundaries
-        coboundaries[3].insert_or_add(&6, Cyclic::one());
-        coboundaries[4].insert_or_add(&6, Cyclic::one());
-        coboundaries[5].insert_or_add(&6, Cyclic::one());
+        coboundaries[3].insert_or_add(6, Cyclic::one());
+        coboundaries[4].insert_or_add(6, Cyclic::one());
+        coboundaries[5].insert_or_add(6, Cyclic::one());
 
         let complex = CellComplex::new(cell_dimensions, grades, boundaries, coboundaries);
         let matching = CoreductionMatching::new(complex);
