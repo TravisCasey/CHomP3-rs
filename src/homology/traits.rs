@@ -30,19 +30,23 @@ use crate::{ComplexLike, MatchResult, ModuleLike, RingLike};
 /// and Nanda, *Discrete Morse Theoretic Algorithms for Computing Homology of
 /// Complexes and Maps*.
 pub trait MorseMatching {
-    /// Cell type of the complex, and must thus be equivalent to
+    /// Cell type of the parent cell complex; must be equivalent to
     /// `<Self::Complex as ComplexLike>::Cell` and `<Self::Module as
     /// ModuleLike>::Cell`.
-    type Cell: Clone + Eq;
+    type UpperCell: Clone + Eq;
     /// Coefficient ring type of the complex, and must thus be equivalent to
     /// `<Self::Complex as ComplexLike>::Ring` and `<Self::Module as
     /// ModuleLike>::Ring`.
     type Ring: RingLike;
-    /// Module type used to represent (co)chains in the complex and must thus
-    /// be equivalent to `<Self::Complex as ComplexLike>::Module`.
-    type Module: ModuleLike<Cell = Self::Cell, Ring = Self::Ring>;
-    /// The cell complex type on which the matching is performed.
-    type Complex: ComplexLike<Cell = Self::Cell, Ring = Self::Ring, Module = Self::Module>;
+    /// Module type used to represent (co)chains in the parent cell complex;
+    /// must be equivalent to `<Self::Complex as ComplexLike>::Module`.
+    type UpperModule: ModuleLike<Cell = Self::UpperCell, Ring = Self::Ring>;
+    /// Module type used to represent (co)chains in the reduced Morse complex
+    /// formed from this partial matching. The cell type of the Morse complex is
+    /// `u32`, with the ring type being the same as the parent complex.
+    type LowerModule: ModuleLike<Cell = u32, Ring = Self::Ring>;
+    /// The parent cell complex type on which the matching is performed.
+    type UpperComplex: ComplexLike<Cell = Self::UpperCell, Ring = Self::Ring, Module = Self::UpperModule>;
     /// The priority type used to order cells for efficient (co)lowering and
     /// (co)lifting operations and related operations. See [`MatchResult`]
     /// and [`MorseMatching::match_cell`] for details.
@@ -51,29 +55,80 @@ pub trait MorseMatching {
     /// Compute an acyclic partial matching on the given cell complex,
     /// determining the critical (ace) cells and preparing for construction of
     /// the reduced Morse complex.
-    fn compute_matching(complex: Self::Complex) -> Self;
+    fn compute_matching(complex: Self::UpperComplex) -> Self;
 
     /// Return an immutable reference to the owned parent cell complex.
-    fn get_complex(&self) -> &Self::Complex;
+    fn get_complex(&self) -> &Self::UpperComplex;
 
     /// Return the critical cells found by the matching algorithm. These are
     /// primarily used to construct the reduced Morse complex.
-    fn critical_cells(&self) -> &[Self::Cell];
+    fn critical_cells(&self) -> Vec<Self::UpperCell>;
 
-    /// Compute and return the boundary and coboundary of each cell critical
-    /// cell.
+    /// If `cell` is a critical cell of the parent complex, return its
+    /// represenative as a cell in the Morse complex. Else, return `None`.
+    ///
+    /// The representative must also be consistent with its index into the
+    /// returned vector of [`MorseMatching::critical_cells`].
+    fn project_cell(&self, cell: Self::UpperCell) -> Option<u32>;
+
+    /// A provided method to project a chain from the parent cell complex onto
+    /// its critical cells in the Morse complex.
+    ///
+    /// The map implemented by this method is not a chain map; see the
+    /// [`MorseMatching::lower`] and [`MorseMatching::colower`] methods for
+    /// a chain map used for representing chains of the parent complex in the
+    /// Morse complex. The intention of this method is largely to translate from
+    /// the cell and module types of the parent cell complex to that of the
+    /// Morse complex.
+    fn project(&self, chain: Self::UpperModule) -> Self::LowerModule {
+        let mut projected_chain = Self::LowerModule::new();
+        for (cell, coefficient) in chain.into_iter() {
+            if let Some(projected_cell) = self.project_cell(cell) {
+                projected_chain.insert_or_add(&projected_cell, coefficient);
+            }
+        }
+        projected_chain
+    }
+
+    /// For the cell `cell` in the Morse complex, get the corresponding critical
+    /// cell in the parent cell complex.
+    ///
+    /// This must be equivalent to `matching.critical_cell[cell as usize]`,
+    /// where `matchings` is the type implementing [`MorseMatching`].
+    fn include_cell(&self, cell: u32) -> Self::UpperCell;
+
+    /// A provided method to include `chain` from the Morse complex into the
+    /// parent cell complex, by mapping each cell of the Morse complex to
+    /// the corresponding critical cell in the parent cell complex.
+    ///
+    /// The map implemented by this method is not a chain map; see the
+    /// [`Morsematching::lift`] and [`MorseMatching::colift`] methods for a
+    /// chain map used for representing chains of the Morse complex in the
+    /// parent cell complex. The intention of this method is largely to
+    /// translate the cell and module types of the Morse complex to that of
+    /// the parent cell complex.
+    fn include(&self, chain: Self::LowerModule) -> Self::UpperModule {
+        let mut included_chain = Self::UpperModule::new();
+        for (cell, coefficient) in chain.into_iter() {
+            included_chain.insert_or_add(&self.include_cell(cell), coefficient);
+        }
+        included_chain
+    }
+
+    /// Compute and return the boundary and coboundary of each critical cell,
+    /// projected to the Morse complex.
     ///
     /// The first vector contains the boundaries while the second contains the
     /// coboundaries. The order of the (co)boundaries must be consistent with
     /// the returned vector of [`MorseMatching::critical_cells`].
-    fn boundary_and_coboundary(&self) -> (Vec<Self::Module>, Vec<Self::Module>) {
+    fn boundary_and_coboundary(&self) -> (Vec<Self::LowerModule>, Vec<Self::LowerModule>) {
         let critical_cells = self.critical_cells();
         let mut boundaries = Vec::with_capacity(critical_cells.len());
         let mut coboundaries = Vec::with_capacity(critical_cells.len());
 
         for cell in critical_cells.iter() {
-            boundaries.push(self.lower(&self.get_complex().cell_boundary(cell)));
-            coboundaries.push(self.lower(&self.get_complex().cell_coboundary(cell)));
+            boundaries.push(self.lower(self.get_complex().cell_boundary(cell)));
+            coboundaries.push(self.lower(self.get_complex().cell_coboundary(cell)));
         }
 
         (boundaries, coboundaries)
@@ -90,8 +145,10 @@ pub trait MorseMatching {
     /// `q` matched to the king cell `k` should (but is not required to) have
     /// priority less than or equal to (in its implementation of `Ord`) the
     /// queen cells in the boundary of `k`.
-    fn match_cell(&self, cell: &Self::Cell)
-    -> &MatchResult<Self::Cell, Self::Ring, Self::Priority>;
+    fn match_cell(
+        &self,
+        cell: &Self::UpperCell,
+    ) -> &MatchResult<Self::UpperCell, Self::Ring, Self::Priority>;
 
     /// Lower `chain` from the parent cell complex to its representative in the
     /// Morse complex having support solely on critical cells.
@@ -99,15 +156,15 @@ pub trait MorseMatching {
     /// This is a chain map between the parent cell complex and the Morse
     /// complex, and thus it commutes with the boundary operators and maps
     /// cycles to cycles.
-    fn lower(&self, chain: &Self::Module) -> Self::Module {
+    fn lower(&self, chain: Self::UpperModule) -> Self::LowerModule {
         // Remaining queens and coefficients to be eliminated. Iteration in this
         // method ceases once this chain is empty.
-        let mut queen_chain = Self::Module::new();
+        let mut queen_chain = Self::UpperModule::new();
         // Exists in the Morse complex, has only critical (ace) cells.
-        let mut lowered_chain = Self::Module::new();
+        let mut lowered_chain = Self::LowerModule::new();
         // Each queen maps to its king, and the boundary of the king is stored
         // in this chain until it is split into queen_chain and lowered_chain.
-        let mut boundary_chain = chain.clone();
+        let mut boundary_chain = chain;
 
         // Using Reverse(_) for min heap
         let mut queen_queue = BinaryHeap::new();
@@ -122,7 +179,12 @@ pub trait MorseMatching {
                         queen_queue.push(Reverse(match_result));
                     }
                     MatchResult::Ace { .. } => {
-                        lowered_chain.insert_or_add(&cell, coef);
+                        lowered_chain.insert_or_add(
+                            &self
+                                .project_cell(cell)
+                                .expect("project_cell returned None on critical cell"),
+                            coef,
+                        );
                     }
                     MatchResult::King { .. } => (),
                 };
@@ -156,7 +218,7 @@ pub trait MorseMatching {
             }
         }
 
-        debug_assert_eq!(queen_chain, Self::Module::new());
+        debug_assert_eq!(queen_chain, Self::UpperModule::new());
 
         lowered_chain
     }
@@ -165,10 +227,10 @@ pub trait MorseMatching {
     /// `cell` from the parent cell complex in the Morse complex.
     ///
     /// `cell` is treated as a singleton chain with a coefficient of one.
-    fn lower_cell(&self, cell: &Self::Cell) -> Self::Module {
-        let mut cell_chain = Self::Module::new();
-        cell_chain.insert_or_add(cell, Self::Ring::one());
-        self.lower(&cell_chain)
+    fn lower_cell(&self, cell: Self::UpperCell) -> Self::LowerModule {
+        let mut cell_chain = Self::UpperModule::new();
+        cell_chain.insert_or_add(&cell, Self::Ring::one());
+        self.lower(cell_chain)
     }
 
     /// Lift `chain` from the Morse complex to the parent cell complex.
@@ -176,15 +238,15 @@ pub trait MorseMatching {
     /// This is a chain map between the parent cell complex and the Morse
     /// complex, and thus it commutes with the boundary operators and maps
     /// cycles to cycles.
-    fn lift(&self, chain: &Self::Module) -> Self::Module {
+    fn lift(&self, chain: Self::LowerModule) -> Self::UpperModule {
         // Remaining queens and coefficients to be eliminated. Iteration in this
         // method ceases once this chain is empty.
-        let mut queen_chain = Self::Module::new();
+        let mut queen_chain = Self::UpperModule::new();
         // The representative of `chain` in the upper complex.
-        let mut lifted_chain = chain.clone();
+        let mut lifted_chain = self.include(chain);
         // Each queen maps to its king, and the boundary of the king is stored
         // in this chain; the queens of this chain are propagated further.
-        let mut boundary_chain = self.get_complex().boundary(chain);
+        let mut boundary_chain = self.get_complex().boundary(&lifted_chain);
 
         // Using Reverse(_) for min heap
         let mut queen_queue = BinaryHeap::new();
@@ -228,7 +290,7 @@ pub trait MorseMatching {
             }
         }
 
-        debug_assert_eq!(queen_chain, Self::Module::new());
+        debug_assert_eq!(queen_chain, Self::UpperModule::new());
 
         lifted_chain
     }
@@ -237,10 +299,10 @@ pub trait MorseMatching {
     /// `cell` from the Morse complex in the parent cell complex.
     ///
     /// `cell` is treated as a singleton chain with a coefficient of one.
-    fn lift_cell(&self, cell: &Self::Cell) -> Self::Module {
-        let mut cell_chain = Self::Module::new();
-        cell_chain.insert_or_add(cell, Self::Ring::one());
-        self.lift(&cell_chain)
+    fn lift_cell(&self, cell: u32) -> Self::UpperModule {
+        let mut cell_chain = Self::LowerModule::new();
+        cell_chain.insert_or_add(&cell, Self::Ring::one());
+        self.lift(cell_chain)
     }
 
     /// Lower `cochain` from the parent cell complex to its representative in
@@ -250,12 +312,12 @@ pub trait MorseMatching {
     /// complex, and thus it commutes with the coboundary operators and maps
     /// cocycles to cocycles. Queens and kings are reversed compared to the
     /// `lower` method.
-    fn colower(&self, cochain: &Self::Module) -> Self::Module {
+    fn colower(&self, cochain: Self::UpperModule) -> Self::LowerModule {
         // Remaining kings and coefficients to be eliminated. Iteration in this
         // method ceases once this cochain is empty.
-        let mut king_cochain = Self::Module::new();
+        let mut king_cochain = Self::UpperModule::new();
         // Exists in the Morse complex, has only critical (ace) cells.
-        let mut colowered_cochain = Self::Module::new();
+        let mut colowered_cochain = Self::LowerModule::new();
         // Each king maps to its queen, and the coboundary of the queen is stored
         // in this cochain until it is split into king_cochain and colowered_cochain.
         let mut coboundary_cochain = cochain.clone();
@@ -273,7 +335,12 @@ pub trait MorseMatching {
                         king_queue.push(match_result);
                     }
                     MatchResult::Ace { .. } => {
-                        colowered_cochain.insert_or_add(&cell, coef);
+                        colowered_cochain.insert_or_add(
+                            &self
+                                .project_cell(cell)
+                                .expect("project_cell returned None on critical cell"),
+                            coef,
+                        );
                     }
                     MatchResult::Queen { .. } => (),
                 };
@@ -307,7 +374,7 @@ pub trait MorseMatching {
             }
         }
 
-        debug_assert_eq!(king_cochain, Self::Module::new());
+        debug_assert_eq!(king_cochain, Self::UpperModule::new());
 
         colowered_cochain
     }
@@ -316,10 +383,10 @@ pub trait MorseMatching {
     /// `cell` from the parent cell complex in the Morse complex.
     ///
     /// `cell` is treated as a singleton cochain with a coefficient of one.
-    fn colower_cell(&self, cell: &Self::Cell) -> Self::Module {
-        let mut cell_cochain = Self::Module::new();
-        cell_cochain.insert_or_add(cell, Self::Ring::one());
-        self.colower(&cell_cochain)
+    fn colower_cell(&self, cell: Self::UpperCell) -> Self::LowerModule {
+        let mut cell_cochain = Self::UpperModule::new();
+        cell_cochain.insert_or_add(&cell, Self::Ring::one());
+        self.colower(cell_cochain)
     }
 
     /// Lift `cochain` from the Morse complex to the parent cell complex.
@@ -328,15 +395,15 @@ pub trait MorseMatching {
     /// complex, and thus it commutes with the coboundary operators and maps
     /// cocycles to cocycles. Queens and kings are reversed compared to the
     /// `lift` method.
-    fn colift(&self, cochain: &Self::Module) -> Self::Module {
+    fn colift(&self, cochain: Self::LowerModule) -> Self::UpperModule {
         // Remaining kings and coefficients to be eliminated. Iteration in this
         // method ceases once this cochain is empty.
-        let mut king_cochain = Self::Module::new();
+        let mut king_cochain = Self::UpperModule::new();
         // The representative of `cochain` in the upper complex.
-        let mut colifted_cochain = cochain.clone();
+        let mut colifted_cochain = self.include(cochain);
         // Each king maps to its queen, and the coboundary of the queen is stored
         // in this cochain; the kings of this cochain are propagated further.
-        let mut coboundary_cochain = self.get_complex().coboundary(cochain);
+        let mut coboundary_cochain = self.get_complex().coboundary(&colifted_cochain);
 
         // Using max heap
         let mut king_queue = BinaryHeap::new();
@@ -380,7 +447,7 @@ pub trait MorseMatching {
             }
         }
 
-        debug_assert_eq!(king_cochain, Self::Module::new());
+        debug_assert_eq!(king_cochain, Self::UpperModule::new());
 
         colifted_cochain
     }
@@ -389,10 +456,10 @@ pub trait MorseMatching {
     /// of `cell` from the Morse complex to the parent cell complex.
     ///
     /// `cell` is treated as a singleton cochain with a coefficient of one.
-    fn colift_cell(&self, cell: &Self::Cell) -> Self::Module {
-        let mut cell_cochain = Self::Module::new();
-        cell_cochain.insert_or_add(cell, Self::Ring::one());
-        self.colift(&cell_cochain)
+    fn colift_cell(&self, cell: u32) -> Self::UpperModule {
+        let mut cell_cochain = Self::LowerModule::new();
+        cell_cochain.insert_or_add(&cell, Self::Ring::one());
+        self.colift(cell_cochain)
     }
 }
 

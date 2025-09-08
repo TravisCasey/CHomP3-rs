@@ -4,10 +4,11 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::marker::PhantomData;
 use std::mem::take;
 
 use crate::homology::util::LinkedList;
-use crate::{ComplexLike, MatchResult, MorseMatching, RingLike};
+use crate::{ComplexLike, HashMapModule, MatchResult, ModuleLike, MorseMatching, RingLike};
 
 /// A type implementing an acyclic partial matching (that is, satisfying
 /// [`MorseMatching`]) based on alternately excising coreduction pairs and leaf
@@ -28,55 +29,87 @@ use crate::{ComplexLike, MatchResult, MorseMatching, RingLike};
 /// The implementation is a reformulation of Algorithm 3.6 in Harker,
 /// Mischaikow, Mrozek, Nanda, *Discrete Morse Theoretic Algorithms for
 /// Computing Homology of Complexes and Maps.*
-pub struct CoreductionMatching<C>
+pub struct CoreductionMatching<C, M = HashMapModule<u32, <C as ComplexLike>::Ring>>
 where
     C: ComplexLike,
     C::Cell: Hash,
 {
     complex: C,
     critical_cells: Vec<C::Cell>,
+    projection: HashMap<C::Cell, u32>,
     matches: HashMap<C::Cell, MatchResult<C::Cell, C::Ring, u32>>,
+    lower_module_type: PhantomData<M>,
 }
 
-impl<C> CoreductionMatching<C>
+impl<C> CoreductionMatching<C, HashMapModule<u32, <C as ComplexLike>::Ring>>
 where
     C: ComplexLike,
     C::Cell: Hash,
 {
-}
-
-impl<C> MorseMatching for CoreductionMatching<C>
-where
-    C: ComplexLike,
-    C::Cell: Hash,
-{
-    type Cell = <C as ComplexLike>::Cell;
-    type Complex = C;
-    type Module = <C as ComplexLike>::Module;
-    type Priority = u32;
-    type Ring = <C as ComplexLike>::Ring;
-
-    fn compute_matching(complex: Self::Complex) -> Self {
-        let (critical_cells, matches) = CoreductionMatchingImpl::compute_matching(&complex);
+    /// Functionally identical to the `compute_matching` function of the
+    /// [`MorseMatching`] trait implemented by this type, but the compiler will
+    /// correctly infer the default module type when using this constructor.
+    ///
+    /// If the user wants to use a different module type, they can use the
+    /// `compute_matching` constructor with type annotations.
+    pub fn new(complex: C) -> Self {
+        let (critical_cells, projection, matches) =
+            CoreductionMatchingImpl::compute_matching(&complex);
         Self {
             complex,
             critical_cells,
+            projection,
             matches,
+            lower_module_type: PhantomData,
+        }
+    }
+}
+
+impl<C, M> MorseMatching for CoreductionMatching<C, M>
+where
+    C: ComplexLike,
+    C::Cell: Hash,
+    M: ModuleLike<Cell = u32, Ring = C::Ring>,
+{
+    type LowerModule = M;
+    type Priority = u32;
+    type Ring = <C as ComplexLike>::Ring;
+    type UpperCell = <C as ComplexLike>::Cell;
+    type UpperComplex = C;
+    type UpperModule = <C as ComplexLike>::Module;
+
+    fn compute_matching(complex: Self::UpperComplex) -> Self {
+        let (critical_cells, projection, matches) =
+            CoreductionMatchingImpl::compute_matching(&complex);
+        Self {
+            complex,
+            critical_cells,
+            projection,
+            matches,
+            lower_module_type: PhantomData,
         }
     }
 
-    fn get_complex(&self) -> &Self::Complex {
+    fn get_complex(&self) -> &Self::UpperComplex {
         &self.complex
     }
 
-    fn critical_cells(&self) -> &[Self::Cell] {
-        &self.critical_cells
+    fn critical_cells(&self) -> Vec<Self::UpperCell> {
+        self.critical_cells.clone()
+    }
+
+    fn project_cell(&self, cell: Self::UpperCell) -> Option<u32> {
+        self.projection.get(&cell).copied()
+    }
+
+    fn include_cell(&self, cell: u32) -> Self::UpperCell {
+        self.critical_cells[cell as usize].clone()
     }
 
     fn match_cell(
         &self,
-        cell: &Self::Cell,
-    ) -> &MatchResult<Self::Cell, Self::Ring, Self::Priority> {
+        cell: &Self::UpperCell,
+    ) -> &MatchResult<Self::UpperCell, Self::Ring, Self::Priority> {
         &self.matches[cell]
     }
 }
@@ -103,7 +136,7 @@ where
 {
     critical_cells: Vec<C::Cell>,
     matches: HashMap<C::Cell, MatchResult<C::Cell, C::Ring, u32>>,
-    indices: HashMap<C::Cell, usize>,
+    projection: HashMap<C::Cell, u32>,
     leaves: LinkedList,
     nodes: Vec<CoreductionNode<C::Cell>>,
     faces: Vec<CoreductionFace<C::Ring>>,
@@ -119,13 +152,14 @@ where
         complex: &C,
     ) -> (
         Vec<C::Cell>,
+        HashMap<C::Cell, u32>,
         HashMap<C::Cell, MatchResult<C::Cell, C::Ring, u32>>,
     ) {
-        let mut indices = HashMap::new();
+        let mut projection = HashMap::new();
         for (index, cell) in complex.cell_iter().enumerate() {
-            indices.insert(cell, index);
+            projection.insert(cell, index as u32);
         }
-        let cell_count = indices.len();
+        let cell_count = projection.len();
 
         let mut nodes = Vec::with_capacity(cell_count);
         for cell in complex.cell_iter() {
@@ -140,7 +174,7 @@ where
         let mut matching = Self {
             critical_cells: Vec::new(),
             matches: HashMap::with_capacity(cell_count),
-            indices,
+            projection,
             leaves: LinkedList::with_capacity(cell_count),
             nodes,
             faces: Vec::new(),
@@ -156,7 +190,11 @@ where
             matching.excise_leaf(node_index);
         }
 
-        (matching.critical_cells, matching.matches)
+        (
+            matching.critical_cells,
+            matching.projection,
+            matching.matches,
+        )
     }
 
     fn initialize_hasse(&mut self, complex: &C) -> Vec<usize> {
@@ -171,7 +209,7 @@ where
                         *bd_coef != C::Ring::zero() && complex.grade(bd_cell) == grade
                     })
             {
-                let bd_index = self.indices[&bd_cell];
+                let bd_index = self.projection[&bd_cell] as usize;
                 self.faces.push(CoreductionFace {
                     parent: index,
                     parent_face_index: self.nodes[index].faces.len(),
@@ -358,7 +396,7 @@ mod tests {
         coboundaries[1].insert_or_add(&2, Cyclic::one());
 
         let complex = CellComplex::new(cell_dimensions, grades, boundaries, coboundaries);
-        let matching = CoreductionMatching::compute_matching(complex);
+        let matching = CoreductionMatching::new(complex);
 
         // Should have one critical cell (contractible to a point)
         assert_eq!(matching.critical_cells().len(), 1);
@@ -421,7 +459,7 @@ mod tests {
         coboundaries[5].insert_or_add(&6, Cyclic::one());
 
         let complex = CellComplex::new(cell_dimensions, grades, boundaries, coboundaries);
-        let matching = CoreductionMatching::compute_matching(complex);
+        let matching = CoreductionMatching::new(complex);
 
         // Triangle is contractible, should reduce to single point
         assert_eq!(matching.critical_cells().len(), 1);
@@ -463,7 +501,7 @@ mod tests {
         let grader = HashMapGrader::uniform(cells.into_iter(), 0, 1);
         let complex: CubicalComplex<TestCubicalModule, _> = CubicalComplex::new(min, max, grader);
 
-        let matching = CoreductionMatching::compute_matching(complex);
+        let matching = CoreductionMatching::new(complex);
 
         // Line segment should contract to a point (complex of interest is grade 0)
         assert_eq!(
@@ -526,7 +564,7 @@ mod tests {
         let grader = HashMapGrader::uniform(cells.into_iter(), 0, 1);
         let complex: CubicalComplex<TestCubicalModule, _> = CubicalComplex::new(min, max, grader);
 
-        let matching = CoreductionMatching::compute_matching(complex.clone());
+        let matching = CoreductionMatching::new(complex.clone());
 
         // Empty square has 1 dim 0 critical cell and 1 dim 1 critical cell
         // in grade 0.
