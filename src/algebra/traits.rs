@@ -34,6 +34,8 @@ pub trait RingLike: AlgebraicBase + Additive + Multiplicative {
     fn zero() -> Self;
     /// Creates a new ring element representing the multiplicative identity.
     fn one() -> Self;
+    /// Check if the element is invertible in the ring.
+    fn is_invertible(&self) -> bool;
     /// Return the multiplicative inverse of `self`, for thos values at which it
     /// exists. It is good practice to panic if the inverse does not exist
     /// (i.e. at the zero element).

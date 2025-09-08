@@ -76,6 +76,10 @@ impl<const MOD: u64> RingLike for Cyclic<MOD> {
     fn one() -> Self {
         Self::new(1)
     }
+    
+    fn is_invertible(&self) -> bool {
+        self.remainder != 0
+    }
 
     fn invert(&self) -> Self {
         assert!(

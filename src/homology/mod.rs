@@ -2,8 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-pub use traits::MorseMatching;
+pub use coreduction::CoreductionMatching;
 pub use morse::MatchResult;
+pub use traits::MorseMatching;
 
-mod traits;
+mod coreduction;
 mod morse;
+mod traits;
+mod util;

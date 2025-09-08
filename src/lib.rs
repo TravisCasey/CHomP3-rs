@@ -15,7 +15,7 @@ pub use crate::complexes::{
     CellComplex, ComplexLike, Cube, CubeIterator, CubicalComplex, Grader, HashMapGrader, Orthant,
     OrthantIterator, TopCubeGrader,
 };
-pub use crate::homology::{MatchResult, MorseMatching};
+pub use crate::homology::{CoreductionMatching, MatchResult, MorseMatching};
 
 mod algebra;
 mod complexes;

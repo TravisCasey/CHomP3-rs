@@ -16,8 +16,8 @@ use std::cmp::Ordering;
 /// `MorseMatching` trait can be made significantly more efficient by setting
 /// the priority values subject to the condition:
 /// > A queen cell `q` matched to the king cell `k` has priority less than or
-/// equal to (in its implementation of `Ord`) the queen cells in the boundary of
-/// `k`.
+/// > equal to (in its implementation of `Ord`) the queen cells in the boundary
+/// > of `k`.
 ///
 /// The `Ord` implementation of this enum is intended to only be used between
 /// two king cells or between two queens. The implementation does not panic if
