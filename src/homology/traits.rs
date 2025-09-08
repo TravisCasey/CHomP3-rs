@@ -148,7 +148,7 @@ pub trait MorseMatching {
     fn match_cell(
         &self,
         cell: &Self::UpperCell,
-    ) -> &MatchResult<Self::UpperCell, Self::Ring, Self::Priority>;
+    ) -> MatchResult<Self::UpperCell, Self::Ring, Self::Priority>;
 
     /// Lower `chain` from the parent cell complex to its representative in the
     /// Morse complex having support solely on critical cells.
@@ -201,7 +201,7 @@ pub trait MorseMatching {
                 }
                 panic!("Queen queue populated with non-queen cell");
             }) {
-                let queen_coef = queen_chain.coef(cell);
+                let queen_coef = queen_chain.coef(&cell);
 
                 // The coefficient which cancels the original queen when the
                 // boundary of its king is added to queen_chain.
@@ -210,7 +210,7 @@ pub trait MorseMatching {
                 // Compute the scaled boundary of the king
                 boundary_chain = self
                     .get_complex()
-                    .cell_boundary(king)
+                    .cell_boundary(&king)
                     .scalar_mul(cancel_coef);
             } else {
                 break;
@@ -272,7 +272,7 @@ pub trait MorseMatching {
                 }
                 panic!("Queen queue populated with non-queen cell");
             }) {
-                let queen_coef = queen_chain.coef(cell);
+                let queen_coef = queen_chain.coef(&cell);
 
                 // The coefficient which cancels the original queen when the
                 // boundary of its king is added to queen_chain.
@@ -281,7 +281,7 @@ pub trait MorseMatching {
                 // Compute the scaled boundary of the king
                 boundary_chain = self
                     .get_complex()
-                    .cell_boundary(king)
+                    .cell_boundary(&king)
                     .scalar_mul(cancel_coef.clone());
                 lifted_chain.insert_or_add(king.clone(), cancel_coef);
             } else {
@@ -356,7 +356,7 @@ pub trait MorseMatching {
                 }
                 panic!("King queue populated with non-king cell");
             }) {
-                let king_coef = king_cochain.coef(cell);
+                let king_coef = king_cochain.coef(&cell);
 
                 // The coefficient which cancels the original king when the
                 // coboundary of its queen is added to king_cochain.
@@ -365,7 +365,7 @@ pub trait MorseMatching {
                 // Compute the scaled coboundary of the queen
                 coboundary_cochain = self
                     .get_complex()
-                    .cell_coboundary(queen)
+                    .cell_coboundary(&queen)
                     .scalar_mul(cancel_coef);
             } else {
                 break;
@@ -428,7 +428,7 @@ pub trait MorseMatching {
                 }
                 panic!("King queue populated with non-king cell");
             }) {
-                let king_coef = king_cochain.coef(cell);
+                let king_coef = king_cochain.coef(&cell);
 
                 // The coefficient which cancels the original king when the
                 // coboundary of its queen is added to king_cochain.
@@ -437,7 +437,7 @@ pub trait MorseMatching {
                 // Compute the scaled coboundary of the queen
                 coboundary_cochain = self
                     .get_complex()
-                    .cell_coboundary(queen)
+                    .cell_coboundary(&queen)
                     .scalar_mul(cancel_coef.clone());
                 colifted_cochain.insert_or_add(queen.clone(), cancel_coef);
             } else {

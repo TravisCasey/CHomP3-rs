@@ -109,8 +109,8 @@ where
     fn match_cell(
         &self,
         cell: &Self::UpperCell,
-    ) -> &MatchResult<Self::UpperCell, Self::Ring, Self::Priority> {
-        &self.matches[cell]
+    ) -> MatchResult<Self::UpperCell, Self::Ring, Self::Priority> {
+        self.matches[cell].clone()
     }
 }
 
@@ -524,11 +524,11 @@ mod tests {
         for cell in &cells {
             match matching.match_cell(cell) {
                 MatchResult::King { queen, .. } => {
-                    assert!(cells.contains(queen));
+                    assert!(cells.contains(&queen));
                     found_king_queen_pair = true;
                 }
                 MatchResult::Queen { king, .. } => {
-                    assert!(cells.contains(king));
+                    assert!(cells.contains(&king));
                     found_king_queen_pair = true;
                 }
                 MatchResult::Ace { .. } => {}
