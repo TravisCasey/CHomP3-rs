@@ -30,9 +30,6 @@ use crate::{ModuleLike, RingLike};
 /// - `a_i` are coefficients in the ring `R`
 /// - `c_i` are basis elements of type `B`
 ///
-/// When `R` is a field (satisfies [`crate::FieldLike`]), the module becomes a
-/// vector space.
-///
 /// # Examples
 ///
 /// ## Creating and manipulating modules

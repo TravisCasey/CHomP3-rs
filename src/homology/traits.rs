@@ -102,7 +102,7 @@ pub trait MorseMatching {
     /// the corresponding critical cell in the parent cell complex.
     ///
     /// The map implemented by this method is not a chain map; see the
-    /// [`Morsematching::lift`] and [`MorseMatching::colift`] methods for a
+    /// [`MorseMatching::lift`] and [`MorseMatching::colift`] methods for a
     /// chain map used for representing chains of the Morse complex in the
     /// parent cell complex. The intention of this method is largely to
     /// translate the cell and module types of the Morse complex to that of
