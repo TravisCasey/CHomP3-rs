@@ -6,6 +6,8 @@
 
 use std::iter::zip;
 
+use serde::{Deserialize, Serialize};
+
 use super::cubical::{Cube, Orthant};
 use super::traits::Grader;
 
@@ -189,7 +191,7 @@ impl Iterator for CubeIterator {
 /// let grade = cube_grader.grade(&vertex);
 /// assert_eq!(grade, 1); // minimum of surrounding grades: 1, 2, 3, 4
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TopCubeGrader<G>
 where
     G: Grader<Orthant>,

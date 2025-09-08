@@ -9,6 +9,8 @@ use std::hash::{BuildHasher, Hash, RandomState};
 use std::iter::{Filter, FromIterator};
 use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use crate::{ModuleLike, RingLike};
 
 /// HashMap-based implementation of algebraic modules.
@@ -317,6 +319,39 @@ where
         Self {
             map: HashMap::<B, R, H>::from_iter(iter),
         }
+    }
+}
+
+impl<B, R, H> Serialize for HashMapModule<B, R, H>
+where
+    B: Clone + Serialize,
+    R: Clone + Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let map_as_vec: Vec<(B, R)> = self
+            .map
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        map_as_vec.serialize(serializer)
+    }
+}
+
+impl<'de, B, R, H> Deserialize<'de> for HashMapModule<B, R, H>
+where
+    B: Eq + Hash + Deserialize<'de>,
+    R: Deserialize<'de>,
+    H: BuildHasher + Default,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let map_as_vec = Vec::<(B, R)>::deserialize(deserializer)?;
+        Ok(Self::from_iter(map_as_vec))
     }
 }
 

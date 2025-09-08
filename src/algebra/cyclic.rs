@@ -10,6 +10,7 @@ use std::fmt::{Display, Error, Formatter};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use flint_sys::nmod_vec::{nmod_add, nmod_init, nmod_inv, nmod_mul, nmod_neg, nmod_sub, nmod_t};
+use serde::{Deserialize, Serialize};
 
 use crate::algebra::traits::RingLike;
 
@@ -59,6 +60,25 @@ impl<const MOD: u64> Cyclic<MOD> {
             remainder: value % MOD,
             modulus,
         }
+    }
+}
+
+impl<const MOD: u64> Serialize for Cyclic<MOD> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.remainder.serialize(serializer)
+    }
+}
+
+impl<'de, const MOD: u64> Deserialize<'de> for Cyclic<MOD> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let remainder = u64::deserialize(deserializer)?;
+        Ok(Self::new(remainder))
     }
 }
 
