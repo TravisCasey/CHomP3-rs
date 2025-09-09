@@ -12,226 +12,229 @@
     ]
   },
   "grading_function": [
+    2,
     [
-      {
-        "base_orthant": {
-          "coordinates": [
-            0,
-            1
-          ]
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              1,
+              0
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              0,
+              -1
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            -1,
-            0
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            2,
-            1
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              1,
+              0
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              0,
+              0
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            1,
-            0
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            2,
-            0
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              1,
+              0
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              1,
+              -1
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            1,
-            -1
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            0,
-            0
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              2,
+              0
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              1,
+              0
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            -1,
-            0
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            1,
-            1
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              2,
+              1
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              1,
+              0
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            1,
-            0
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            1,
-            0
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              1,
+              1
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              0,
+              0
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            1,
-            -1
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            2,
-            0
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              0,
+              1
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              0,
+              0
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            1,
-            0
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            0,
-            0
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              0,
+              1
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              -1,
+              0
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            0,
-            -1
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            0,
-            1
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              1,
+              1
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              1,
+              0
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            0,
-            0
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            0,
-            0
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              2,
+              0
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              1,
+              -1
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            -1,
-            -1
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            1,
-            0
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              0,
+              0
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              0,
+              -1
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            0,
-            0
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            1,
-            0
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              0,
+              0
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              -1,
+              0
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            0,
-            -1
-          ]
-        }
-      },
-      0
-    ],
-    [
-      {
-        "base_orthant": {
-          "coordinates": [
-            1,
-            1
-          ]
+        0
+      ],
+      [
+        {
+          "base_orthant": {
+            "coordinates": [
+              0,
+              0
+            ]
+          },
+          "dual_orthant": {
+            "coordinates": [
+              -1,
+              -1
+            ]
+          }
         },
-        "dual_orthant": {
-          "coordinates": [
-            0,
-            0
-          ]
-        }
-      },
-      0
+        0
+      ]
     ]
   ],
   "module_type": null

@@ -110,7 +110,6 @@ mod cubical_complex_generators {
     ///      |      |      |
     ///      |      |      |
     ///      |______|______|
-    /// 
     pub fn figure_eight() -> CubicalComplex<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Cube>> {
         // Define bounds: 3x2 grid of orthants
         let minimum = Orthant::from([0, 0]);
@@ -157,7 +156,10 @@ mod cubical_complex_generators {
                 for z in 0..3 {
                     if z == 1 {
                         // Make the torus hollow
-                        if x == 1 || x == 5 || y == 1 || y == 5 {
+                        if (x == 1 || x == 5) && (1..=5).contains(&y) {
+                            continue;
+                        }
+                        if (y == 1 || y == 5) && (1..=5).contains(&x) {
                             continue;
                         }
                     }
