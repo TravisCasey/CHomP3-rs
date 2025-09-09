@@ -1,0 +1,78 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - stable
+    name: clippy/${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy
+      
+  format:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - nightly
+    name: format/${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+      
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+    name: tests/${{ matrix.rust }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --verbose
+      - run: cargo test --verbose
+  
+  docs:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - nightly
+    name: docs/${{ matrix.rust }}
+    env:
+      RUSTDOCFLAGS: "-Dwarnings --cfg docsrs"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - run: cargo doc --no-deps --lib
