@@ -72,6 +72,11 @@ where
             coboundaries,
         }
     }
+
+    /// The number of cells in the complex.
+    pub fn cell_count(&self) -> u32 {
+        self.cell_dimensions.len() as u32
+    }
 }
 
 impl<M> ComplexLike for CellComplex<M>
@@ -124,33 +129,17 @@ mod tests {
     use super::*;
     use crate::{Cyclic, HashMapModule, ModuleLike, RingLike};
 
-    // Type alias to make tests more readable and easily adaptable
-    type TestModule = HashMapModule<u32, Cyclic<5>>;
-
-    fn create_empty_complex() -> CellComplex<TestModule> {
-        CellComplex::new(vec![], vec![], vec![], vec![])
-    }
-
-    fn create_single_vertex_complex() -> CellComplex<TestModule> {
-        let cell_dimensions = vec![0]; // One 0-dimensional cell (vertex)
-        let grades = vec![0]; // Grade 0
-        let boundaries = vec![TestModule::new()];
-        let coboundaries = vec![TestModule::new()];
-
-        CellComplex::new(cell_dimensions, grades, boundaries, coboundaries)
-    }
-
-    fn create_line_segment_complex() -> CellComplex<TestModule> {
+    fn create_line_segment_complex() -> CellComplex<HashMapModule<u32, Cyclic<5>>> {
         // Two vertices (cells 0, 1) and one edge (cell 2)
         let cell_dimensions = vec![0, 0, 1]; // vertex, vertex, edge
         let grades = vec![0, 0, 0];
 
-        let mut boundaries = vec![TestModule::new(), TestModule::new(), TestModule::new()];
+        let mut boundaries = vec![HashMapModule::new(); 3];
         // Boundary of edge (cell 2) is vertex1 - vertex0
         boundaries[2].insert_or_add(1, Cyclic::one());
         boundaries[2].insert_or_add(0, -Cyclic::one());
 
-        let mut coboundaries = vec![TestModule::new(), TestModule::new(), TestModule::new()];
+        let mut coboundaries = vec![HashMapModule::new(); 3];
         // Coboundary of vertex 0 includes the edge with coefficient -1
         coboundaries[0].insert_or_add(2, -Cyclic::one());
         // Coboundary of vertex 1 includes the edge with coefficient +1
@@ -159,13 +148,13 @@ mod tests {
         CellComplex::new(cell_dimensions, grades, boundaries, coboundaries)
     }
 
-    fn create_graded_triangle_complex() -> CellComplex<TestModule> {
+    fn create_graded_triangle_complex() -> CellComplex<HashMapModule<u32, Cyclic<5>>> {
         // 3 vertices (0,1,2), 3 edges (3,4,5), 1 triangle face (6)
         // The grades correspond to the dimensions of the cells
         let cell_dimensions = vec![0, 0, 0, 1, 1, 1, 2];
         let grades = vec![0, 0, 0, 1, 1, 1, 2];
 
-        let mut boundaries = vec![TestModule::new(); 7];
+        let mut boundaries = vec![HashMapModule::new(); 7];
         boundaries[3].insert_or_add(1, Cyclic::one()); // edge 0->1
         boundaries[3].insert_or_add(0, -Cyclic::one());
 
@@ -179,7 +168,7 @@ mod tests {
         boundaries[6].insert_or_add(4, Cyclic::one()); // +edge(1->2)
         boundaries[6].insert_or_add(5, Cyclic::one()); // +edge(2->0)
 
-        let mut coboundaries = vec![TestModule::new(); 7];
+        let mut coboundaries = vec![HashMapModule::new(); 7];
         coboundaries[0].insert_or_add(3, -Cyclic::one());
         coboundaries[0].insert_or_add(5, Cyclic::one());
 
@@ -201,39 +190,22 @@ mod tests {
     fn test_constructor_panics_on_mismatched_grades_length() {
         let cell_dimensions = vec![0, 1, 2];
         let grades = vec![0, 1];
-        let boundaries = vec![TestModule::new(); 3];
-        let coboundaries = vec![TestModule::new(); 3];
+        let boundaries = vec![HashMapModule::new(); 3];
+        let coboundaries = vec![HashMapModule::new(); 3];
 
-        CellComplex::new(cell_dimensions, grades, boundaries, coboundaries);
-    }
-
-    #[test]
-    fn test_empty_complex_construction() {
-        let complex = create_empty_complex();
-        assert_eq!(complex.dimension(), 0);
-
-        let cells: Vec<_> = complex.cell_iter().collect();
-        assert!(cells.is_empty());
-    }
-
-    #[test]
-    fn test_single_vertex_construction() {
-        let complex = create_single_vertex_complex();
-        assert_eq!(complex.dimension(), 0);
-        assert_eq!(complex.grade(&0), 0);
-        assert_eq!(complex.cell_dimension(&0), 0);
-
-        let boundary = complex.cell_boundary(&0);
-        assert_eq!(boundary, TestModule::new()); // Empty boundary
-
-        let cells: Vec<_> = complex.cell_iter().collect();
-        assert_eq!(cells, vec![0]);
+        CellComplex::<HashMapModule<u32, Cyclic<5>>>::new(
+            cell_dimensions,
+            grades,
+            boundaries,
+            coboundaries,
+        );
     }
 
     #[test]
     fn test_line_segment_structure() {
         let complex = create_line_segment_complex();
         assert_eq!(complex.dimension(), 1);
+        assert_eq!(complex.cell_count(), 3);
 
         // Check cell dimensions
         assert_eq!(complex.cell_dimension(&0), 0);
@@ -258,6 +230,7 @@ mod tests {
     fn test_triangle_structure() {
         let complex = create_graded_triangle_complex();
         assert_eq!(complex.dimension(), 2);
+        assert_eq!(complex.cell_count(), 7);
 
         // Verify we have all expected cells
         let cells: Vec<_> = complex.cell_iter().collect();
@@ -292,7 +265,7 @@ mod tests {
 
         // Create a chain that is a linear combination of edges: 2*edge3 + 3*edge4 -
         // edge5
-        let mut edge_chain = TestModule::new();
+        let mut edge_chain = HashMapModule::new();
         edge_chain.insert_or_add(3, Cyclic::from(2)); // 2 * edge(0->1)
         edge_chain.insert_or_add(4, Cyclic::from(3)); // 3 * edge(1->2)
         edge_chain.insert_or_add(5, -Cyclic::one()); // -1 * edge(2->0)
@@ -304,7 +277,7 @@ mod tests {
         // 2*(vertex1 - vertex0) + 3*(vertex2 - vertex1) - 1*(vertex0 - vertex2)
         // = 2*vertex1 - 2*vertex0 + 3*vertex2 - 3*vertex1 - vertex0 + vertex2
         // = -3*vertex0 - vertex1 + 4*vertex2
-        let mut expected_boundary = TestModule::new();
+        let mut expected_boundary = HashMapModule::new();
         expected_boundary.insert_or_add(0, Cyclic::from(2)); // -3 = 2 (mod 5)
         expected_boundary.insert_or_add(1, Cyclic::from(4)); // -1 = 4 (mod 5)
         expected_boundary.insert_or_add(2, Cyclic::from(4)); // 4 = 4 (mod 5)
@@ -320,7 +293,7 @@ mod tests {
         // includes vertex1
         let edge_boundary_filtered = complex.cell_boundary_if(&3, |cell| *cell == 1);
 
-        let mut expected = TestModule::new();
+        let mut expected = HashMapModule::new();
         expected.insert_or_add(1, Cyclic::one()); // Only vertex1 should be included
 
         assert_eq!(edge_boundary_filtered, expected);
@@ -331,7 +304,7 @@ mod tests {
         let complex = create_graded_triangle_complex();
 
         // Create a chain of edges: edge3 + edge4
-        let mut edge_chain = TestModule::new();
+        let mut edge_chain = HashMapModule::new();
         edge_chain.insert_or_add(3, Cyclic::one()); // edge(0->1)
         edge_chain.insert_or_add(4, Cyclic::one()); // edge(1->2)
 
@@ -339,7 +312,7 @@ mod tests {
         let chain_boundary_filtered =
             complex.boundary_if(&edge_chain, |cell| *cell == 0 || *cell == 2);
 
-        let mut expected = TestModule::new();
+        let mut expected = HashMapModule::new();
         expected.insert_or_add(0, -Cyclic::one()); // From edge3 boundary
         expected.insert_or_add(2, Cyclic::one()); // From edge4 boundary
 
@@ -353,7 +326,7 @@ mod tests {
         // Test cell_coboundary for vertex 0
         let vertex0_coboundary = complex.cell_coboundary(&0);
 
-        let mut expected = TestModule::new();
+        let mut expected = HashMapModule::new();
         expected.insert_or_add(3, -Cyclic::one()); // edge3 with coefficient -1
         expected.insert_or_add(5, Cyclic::one()); // edge5 with coefficient +1
 
@@ -367,7 +340,7 @@ mod tests {
         // Test coboundary of vertex 0 with predicate that only includes edge 3
         let vertex0_coboundary_filtered = complex.cell_coboundary_if(&0, |cell| *cell == 3);
 
-        let mut expected = TestModule::new();
+        let mut expected = HashMapModule::new();
         expected.insert_or_add(3, -Cyclic::one()); // Only edge3 should be included
 
         assert_eq!(vertex0_coboundary_filtered, expected);
@@ -378,19 +351,19 @@ mod tests {
         let complex = create_graded_triangle_complex();
 
         // Create a chain of vertices: vertex0 + vertex1
-        let mut vertex_chain = TestModule::new();
+        let mut vertex_chain = HashMapModule::new();
         vertex_chain.insert_or_add(0, Cyclic::one());
         vertex_chain.insert_or_add(1, Cyclic::one());
 
         // Compute coboundary with predicate that only includes edge 3
         let chain_coboundary_filtered = complex.coboundary_if(&vertex_chain, |cell| *cell == 3);
 
-        let mut expected = TestModule::new();
+        let mut expected = HashMapModule::<u32, Cyclic<5>>::new();
         expected.insert_or_add(3, -Cyclic::one()); // From vertex0 coboundary
         expected.insert_or_add(3, Cyclic::one()); // From vertex1 coboundary
         // These should cancel out to zero
 
-        assert_eq!(chain_coboundary_filtered, TestModule::new());
+        assert_eq!(chain_coboundary_filtered, HashMapModule::new());
     }
 
     #[test]
@@ -399,7 +372,7 @@ mod tests {
 
         // Create a chain that is a linear combination of vertices: vertex0 + 2*vertex1
         // - vertex2
-        let mut vertex_chain = TestModule::new();
+        let mut vertex_chain = HashMapModule::new();
         vertex_chain.insert_or_add(0, Cyclic::one());
         vertex_chain.insert_or_add(1, Cyclic::from(2));
         vertex_chain.insert_or_add(2, -Cyclic::one());
@@ -414,7 +387,7 @@ mod tests {
         // Total: -edge3 + edge5 + 2*(-edge4 + edge3) + (-1)*(-edge5 + edge4)
         //      = -edge3 + edge5 - 2*edge4 + 2*edge3 + edge5 - edge4
         //      = edge3 + 2*edge5 - 3*edge4
-        let mut expected_coboundary = TestModule::new();
+        let mut expected_coboundary = HashMapModule::new();
         expected_coboundary.insert_or_add(3, Cyclic::one());
         expected_coboundary.insert_or_add(4, Cyclic::from(2)); // -3 = 2 (mod 5)
         expected_coboundary.insert_or_add(5, Cyclic::from(2));

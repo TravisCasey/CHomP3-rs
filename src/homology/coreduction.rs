@@ -53,15 +53,7 @@ where
     /// If the user wants to use a different module type, they can use the
     /// `compute_matching` constructor with type annotations.
     pub fn new(complex: C) -> Self {
-        let (critical_cells, projection, matches) =
-            CoreductionMatchingImpl::compute_matching(&complex);
-        Self {
-            complex,
-            critical_cells,
-            projection,
-            matches,
-            lower_module_type: PhantomData,
-        }
+        Self::compute_matching(complex)
     }
 }
 
@@ -79,8 +71,11 @@ where
     type UpperModule = <C as ComplexLike>::Module;
 
     fn compute_matching(complex: Self::UpperComplex) -> Self {
-        let (critical_cells, projection, matches) =
-            CoreductionMatchingImpl::compute_matching(&complex);
+        let (critical_cells, matches) = CoreductionMatchingImpl::compute_matching(&complex);
+        let mut projection = HashMap::with_capacity(critical_cells.len());
+        for (lower_cell, upper_cell) in critical_cells.iter().enumerate() {
+            projection.insert(upper_cell.clone(), lower_cell as u32);
+        }
         Self {
             complex,
             critical_cells,
@@ -92,6 +87,10 @@ where
 
     fn get_upper_complex(&self) -> &Self::UpperComplex {
         &self.complex
+    }
+
+    fn extract_upper_complex(self) -> Self::UpperComplex {
+        self.complex
     }
 
     fn critical_cells(&self) -> Vec<Self::UpperCell> {
@@ -136,7 +135,7 @@ where
 {
     critical_cells: Vec<C::Cell>,
     matches: HashMap<C::Cell, MatchResult<C::Cell, C::Ring, u32>>,
-    projection: HashMap<C::Cell, u32>,
+    indices: HashMap<C::Cell, u32>,
     leaves: LinkedList,
     nodes: Vec<CoreductionNode<C::Cell>>,
     faces: Vec<CoreductionFace<C::Ring>>,
@@ -152,17 +151,30 @@ where
         complex: &C,
     ) -> (
         Vec<C::Cell>,
-        HashMap<C::Cell, u32>,
         HashMap<C::Cell, MatchResult<C::Cell, C::Ring, u32>>,
     ) {
-        let mut projection = HashMap::new();
+        // Map each cell in `complex` to its index in the iterator from
+        // `complex.cell_iter()`.
+        // These indices are used to store the cells
+        // contiguously for efficient lookup/manipulations during matching.
+        let mut indices = HashMap::new();
         for (index, cell) in complex.cell_iter().enumerate() {
-            projection.insert(cell, index as u32);
+            indices.insert(cell, index as u32);
         }
-        let cell_count = projection.len();
+        let cell_count = indices.len();
 
+        // The CoreductionNode class stores a (contiguous) linked list of faces
+        // and cofaces as well as the actual cell.
+        // We use a linked list so items can be removed in constant time (with
+        // a known index of the item). The removed items are connections to
+        // cells that have been excised.
+        // If the cell is a leaf (no faces remaining), it is stored in the
+        // `leaves` linked list; `leaf_index` is its index in `leaves`, if it is
+        // present. Should the cell be excised as a coreduction pair, this
+        // allows it to be removed from the `leaves` linked list.
         let mut nodes = Vec::with_capacity(cell_count);
         for cell in complex.cell_iter() {
+            debug_assert_eq!(indices[&cell] as usize, nodes.len());
             nodes.push(CoreductionNode {
                 cofaces: LinkedList::new(),
                 faces: LinkedList::new(),
@@ -174,33 +186,105 @@ where
         let mut matching = Self {
             critical_cells: Vec::new(),
             matches: HashMap::with_capacity(cell_count),
-            projection,
+            indices,
             leaves: LinkedList::with_capacity(cell_count),
             nodes,
             faces: Vec::new(),
         };
 
+        // Initial coreduction pairs from construction; these are processed
+        // first before proceeding to the main (excise leaf, excise coreduction
+        // pairs) loop below.
+        // It is possible that the paired cell to a cell in this iterator has
+        // already been excised; thus, we check that it still has exactly one
+        // face.
         for upper_index in matching.initialize_hasse(complex) {
+            debug_assert!(
+                matching.nodes[upper_index].faces.len() <= 1,
+                "initial coreduction pair with greater than one face"
+            );
+
             if matching.nodes[upper_index].faces.len() == 1 {
                 matching.match_pair(upper_index);
             }
         }
 
         while let Some(node_index) = matching.leaves.pop_front() {
+            debug_assert!(
+                matching.nodes[node_index].faces.is_empty(),
+                "cell in leaves list with nonzero number of faces"
+            );
+
             matching.excise_leaf(node_index);
         }
 
-        (
-            matching.critical_cells,
-            matching.projection,
-            matching.matches,
-        )
+        // Check that all cells are matched, and that their classification is
+        // consistent between `matching.critical_cells` and `matching.matches`
+        #[cfg(debug_assertions)]
+        {
+            for cell in complex.cell_iter() {
+                let match_result = matching.matches.get(&cell).expect("cell not matched");
+                let critical = matching.critical_cells.contains(&cell);
+                debug_assert!(!(critical ^ matches!(match_result, MatchResult::Ace { .. })));
+            }
+        }
+
+        // Check that matchings are consistent, queens <=> kings and aces with
+        // themselves.
+        #[cfg(debug_assertions)]
+        {
+            for cell in complex.cell_iter() {
+                match &matching.matches[&cell] {
+                    MatchResult::King {
+                        cell: king,
+                        queen,
+                        incidence,
+                        priority,
+                    } => {
+                        debug_assert_eq!(cell, *king);
+                        debug_assert_eq!(
+                            matching.matches[queen],
+                            MatchResult::Queen {
+                                cell: queen.clone(),
+                                king: king.clone(),
+                                incidence: incidence.clone(),
+                                priority: (priority + 1)
+                            }
+                        );
+                    }
+                    MatchResult::Queen {
+                        cell: queen,
+                        king,
+                        incidence,
+                        priority,
+                    } => {
+                        debug_assert_eq!(cell, *queen);
+                        debug_assert_eq!(
+                            matching.matches[king],
+                            MatchResult::King {
+                                cell: king.clone(),
+                                queen: queen.clone(),
+                                incidence: incidence.clone(),
+                                priority: (priority - 1)
+                            }
+                        );
+                    }
+                    MatchResult::Ace { cell: ace } => {
+                        debug_assert_eq!(cell, *ace);
+                    }
+                };
+            }
+        }
+
+        (matching.critical_cells, matching.matches)
     }
 
     fn initialize_hasse(&mut self, complex: &C) -> Vec<usize> {
         let mut initial_pairs = Vec::new();
         for (index, cell) in complex.cell_iter().enumerate() {
             let grade = complex.grade(&cell);
+
+            // All faces with nonzero incidence and identical grade
             for (bd_cell, bd_coef) in
                 complex
                     .cell_boundary(&cell)
@@ -209,7 +293,7 @@ where
                         *bd_coef != C::Ring::zero() && complex.grade(bd_cell) == grade
                     })
             {
-                let bd_index = self.projection[&bd_cell] as usize;
+                let bd_index = self.indices[&bd_cell] as usize;
                 self.faces.push(CoreductionFace {
                     parent: index,
                     parent_face_index: self.nodes[index].faces.len(),
@@ -217,9 +301,11 @@ where
                     child_coface_index: self.nodes[bd_index].cofaces.len(),
                     incidence: bd_coef,
                 });
+
                 self.nodes[index].faces.push_back(self.faces.len() - 1);
                 self.nodes[bd_index].cofaces.push_back(self.faces.len() - 1);
             }
+
             if self.nodes[index].faces.is_empty() {
                 self.nodes[index].leaf_index = Some(self.leaves.push_back(index));
             } else if self.nodes[index].faces.len() == 1 {
@@ -231,7 +317,11 @@ where
     }
 
     fn match_pair(&mut self, upper_index: usize) {
-        debug_assert!(self.nodes[upper_index].faces.len() == 1);
+        debug_assert!(
+            self.nodes[upper_index].faces.len() == 1,
+            "attempting to match a pair that is not a coreduction pair"
+        );
+
         let upper_face_index = self.nodes[upper_index]
             .faces
             .peek_front()
@@ -269,12 +359,17 @@ where
     }
 
     fn excise_pair(&mut self, upper_index: usize, lower_index: usize) {
-        debug_assert!(self.nodes[upper_index].faces.len() == 1);
+        debug_assert!(
+            self.nodes[upper_index].faces.len() == 1,
+            "attempting to excise a pair that is not a coreduction pair"
+        );
+
+        // Remove single edge connecting upper to lower from both
         let upper_face_index = self.nodes[upper_index]
             .faces
             .pop_front()
             .expect("Attempted to excise leaf instead of coreduction pair");
-
+        debug_assert!(self.nodes[upper_index].faces.is_empty());
         self.nodes[lower_index]
             .cofaces
             .pop(self.faces[upper_face_index].child_coface_index);
@@ -284,21 +379,35 @@ where
         while let Some(lower_face_index) = self.nodes[lower_index].faces.pop_front() {
             let lower_face = &self.faces[lower_face_index];
             debug_assert_eq!(lower_face.parent, lower_index);
-            self.nodes[lower_face.child]
+
+            let child_coface_index = self.nodes[lower_face.child]
                 .cofaces
                 .pop(lower_face.child_coface_index);
+            debug_assert_eq!(
+                child_coface_index.expect("face of cell not a coface of its child"),
+                lower_face_index
+            );
         }
 
         // Remove the coface connections of the lower node. This can create
         // leaves by removing the last boundary face of the coface.
+        // Take coface list to satisfy borrow checker on `self.nodes`; if will
+        // be emptied anyway.
         let mut lower_node_cofaces = take(&mut self.nodes[lower_index].cofaces);
         for lower_coface_index in lower_node_cofaces.iter() {
             let lower_coface = &self.faces[lower_coface_index];
             debug_assert_eq!(lower_coface.child, lower_index);
-            self.nodes[lower_coface.parent]
+
+            let parent_face_index = self.nodes[lower_coface.parent]
                 .faces
                 .pop(lower_coface.parent_face_index);
+            debug_assert_eq!(
+                parent_face_index.expect("coface of cell is not a face of its parent"),
+                lower_coface_index
+            );
+
             if self.nodes[lower_coface.parent].faces.is_empty() {
+                debug_assert!(self.nodes[lower_coface.parent].leaf_index.is_none());
                 self.nodes[lower_coface.parent].leaf_index =
                     Some(self.leaves.push_back(lower_coface.parent));
             }
@@ -306,18 +415,31 @@ where
 
         // Remove the coface connections of the upper node. This can create
         // leaves by removing the last boundary face of the coface.
+        // Take coface list to satisfy borrow checker on `self.nodes`; it will
+        // be emptied anyway.
         let mut upper_node_cofaces = take(&mut self.nodes[upper_index].cofaces);
         for upper_coface_index in upper_node_cofaces.iter() {
             let upper_coface = &self.faces[upper_coface_index];
             debug_assert_eq!(upper_coface.child, upper_index);
-            self.nodes[upper_coface.parent]
+
+            let parent_face_index = self.nodes[upper_coface.parent]
                 .faces
                 .pop(upper_coface.parent_face_index);
+            debug_assert_eq!(
+                parent_face_index.expect("coface of cell is not a face of its parent"),
+                upper_coface_index
+            );
+
             if self.nodes[upper_coface.parent].faces.is_empty() {
+                debug_assert!(self.nodes[upper_coface.parent].leaf_index.is_none());
                 self.nodes[upper_coface.parent].leaf_index =
                     Some(self.leaves.push_back(upper_coface.parent));
             }
         }
+
+        // At this point, the graph is correct for having excised the pair. The
+        // remaining step is to identify nodes that have been reduced to having
+        // one face, and match them.
 
         while let Some(lower_coface_index) = lower_node_cofaces.pop_front() {
             let lower_coface = &self.faces[lower_coface_index];
@@ -335,14 +457,30 @@ where
     }
 
     fn excise_leaf(&mut self, node_index: usize) {
+        debug_assert!(
+            self.nodes[node_index].faces.is_empty(),
+            "attempting to excise non-leaf cell"
+        );
+
+        // Remove the coface connections of the leaf. This can create
+        // further leaves by removing the last boundary face of the coface.
+        // Take coface list to satisfy borrow checker on `self.nodes`; it will
+        // be emptied anyway.
         let mut node_cofaces = take(&mut self.nodes[node_index].cofaces);
         for coface_index in node_cofaces.iter() {
             let coface = &self.faces[coface_index];
             debug_assert_eq!(coface.child, node_index);
-            self.nodes[coface.parent]
+
+            let parent_face_index = self.nodes[coface.parent]
                 .faces
                 .pop(coface.parent_face_index);
+            debug_assert_eq!(
+                parent_face_index.expect("coface of cell is not a face of its parent"),
+                coface_index
+            );
+
             if self.nodes[coface.parent].faces.is_empty() {
+                debug_assert!(self.nodes[coface.parent].leaf_index.is_none());
                 self.nodes[coface.parent].leaf_index = Some(self.leaves.push_back(coface.parent));
             }
         }
@@ -368,11 +506,12 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::fs;
 
     use super::*;
     use crate::{
         CellComplex, Cube, CubicalComplex, Cyclic, HashMapGrader, HashMapModule, ModuleLike,
-        Orthant, RingLike,
+        Orthant, RingLike, TopCubeGrader,
     };
 
     type TestModule = HashMapModule<u32, Cyclic<5>>;
@@ -598,5 +737,76 @@ mod tests {
         }
 
         assert_eq!(critical_count + matched_count, all_cells.len());
+    }
+
+    #[test]
+    fn full_reduce_triangle_complex() {
+        let serialized_complex = fs::read_to_string("testing/complexes/triangle_complex.json")
+            .expect("Testing complex file not found.");
+        let complex: CellComplex<HashMapModule<u32, Cyclic<2>>> =
+            serde_json::from_str(&serialized_complex)
+                .expect("Testing complex could not be deserialized.");
+        let (_top_matching, _further_matchings, morse_complex) = CoreductionMatching::full_reduce::<
+            CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
+        >(complex);
+
+        let mut cells_by_dimension = [Vec::new(), Vec::new(), Vec::new()];
+        for cell in morse_complex.cell_iter() {
+            if morse_complex.grade(&cell) == 0 {
+                cells_by_dimension[morse_complex.cell_dimension(&cell) as usize].push(cell);
+                assert_eq!(morse_complex.cell_boundary(&cell), HashMapModule::new());
+            }
+        }
+        assert_eq!(cells_by_dimension[0].len(), 1, "0-dimensional cells");
+        assert_eq!(cells_by_dimension[1].len(), 0, "1-dimensional cells");
+        assert_eq!(cells_by_dimension[2].len(), 0, "2-dimensional cells");
+    }
+
+    #[test]
+    fn full_reduce_cube_torus_complex() {
+        let serialized_complex = fs::read_to_string("testing/complexes/cube_torus_complex.json")
+            .expect("Testing complex file not found.");
+        let complex: CubicalComplex<
+            HashMapModule<Cube, Cyclic<2>>,
+            TopCubeGrader<HashMapGrader<Orthant>>,
+        > = serde_json::from_str(&serialized_complex)
+            .expect("Testing complex could not be deserialized.");
+        let (_top_matching, _further_matchings, morse_complex) = CoreductionMatching::full_reduce::<
+            CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
+        >(complex);
+
+        let mut cells_by_dimension = [Vec::new(), Vec::new(), Vec::new()];
+        for cell in morse_complex.cell_iter() {
+            if morse_complex.grade(&cell) == 0 {
+                cells_by_dimension[morse_complex.cell_dimension(&cell) as usize].push(cell);
+                assert_eq!(morse_complex.cell_boundary(&cell), HashMapModule::new());
+            }
+        }
+        assert_eq!(cells_by_dimension[0].len(), 1, "0-dimensional cells");
+        assert_eq!(cells_by_dimension[1].len(), 2, "1-dimensional cells");
+        assert_eq!(cells_by_dimension[2].len(), 1, "2-dimensional cells");
+    }
+
+    #[test]
+    fn full_reduce_figure_eight_complex() {
+        let serialized_complex = fs::read_to_string("testing/complexes/figure_eight_complex.json")
+            .expect("Testing complex file not found.");
+        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Cube>> =
+            serde_json::from_str(&serialized_complex)
+                .expect("Testing complex could not be deserialized.");
+        let (_top_matching, _further_matchings, morse_complex) = CoreductionMatching::full_reduce::<
+            CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
+        >(complex);
+
+        let mut cells_by_dimension = [Vec::new(), Vec::new(), Vec::new()];
+        for cell in morse_complex.cell_iter() {
+            if morse_complex.grade(&cell) == 0 {
+                cells_by_dimension[morse_complex.cell_dimension(&cell) as usize].push(cell);
+                assert_eq!(morse_complex.cell_boundary(&cell), HashMapModule::new());
+            }
+        }
+        assert_eq!(cells_by_dimension[0].len(), 1, "0-dimensional cells");
+        assert_eq!(cells_by_dimension[1].len(), 2, "1-dimensional cells");
+        assert_eq!(cells_by_dimension[2].len(), 0, "2-dimensional cells");
     }
 }

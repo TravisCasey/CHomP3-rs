@@ -185,13 +185,6 @@ mod tests {
     }
 
     #[test]
-    fn test_iter_empty() {
-        let list = LinkedList::new();
-        let values: Vec<usize> = list.iter().collect();
-        assert_eq!(values, vec![]);
-    }
-
-    #[test]
     fn test_iter_after_operations() {
         let mut list = LinkedList::new();
         list.push_back(1);

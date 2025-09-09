@@ -29,7 +29,10 @@ use crate::{CellComplex, ComplexLike, MatchResult, ModuleLike, RingLike};
 /// For an involved treatment of this approach see Harker, Mischaikow, Mrozek,
 /// and Nanda, *Discrete Morse Theoretic Algorithms for Computing Homology of
 /// Complexes and Maps*.
-pub trait MorseMatching {
+pub trait MorseMatching
+where
+    Self: Sized,
+{
     /// Cell type of the parent cell complex; must be equivalent to
     /// `<Self::Complex as ComplexLike>::Cell` and `<Self::Module as
     /// ModuleLike>::Cell`.
@@ -55,13 +58,11 @@ pub trait MorseMatching {
     /// Compute an acyclic partial matching on the given cell complex,
     /// determining the critical (ace) cells and preparing for construction of
     /// the reduced Morse complex.
-    fn compute_matching(complex: Self::UpperComplex) -> Self
-    where
-        Self: Sized; // dyn compatible
+    fn compute_matching(complex: Self::UpperComplex) -> Self;
 
     /// Create the Morse complex associated to the acyclic partial matching
     /// `self`.
-    /// 
+    ///
     /// This cell comlex has one cell (of type `u32`) for each critical cell
     /// found in the matching; these correspond as indices into the vector
     /// returned from [`MorseMatching::critical_cells`]. Though this library
@@ -70,7 +71,7 @@ pub trait MorseMatching {
     /// the number of critical cells is relatively low so that the resulting
     /// [`CellComplex`] object can explicitly store all dimension, grades, and
     /// (co)boundaries.
-    /// 
+    ///
     /// For theoretical background, consult perhaps Forman *A user's guide to
     /// discrete Morse theory*.
     fn construct_morse_complex(&self) -> CellComplex<Self::LowerModule> {
@@ -87,8 +88,66 @@ pub trait MorseMatching {
         CellComplex::new(cell_dimensions, grades, boundaries, coboundaries)
     }
 
+    /// Fully reduce `complex` via discrete Morse theory, using one matching of
+    /// type `Self` and any number of matchings of type `PM` until further
+    /// matching no longer reduces the number of cells in the cell complex.
+    ///
+    /// The first Morse matching (of type `Self`) differs from the rest as
+    /// `complex` may have some additional structure that a different matching
+    /// type may be able to exploit (for instance, a `CubicalComplex`). However,
+    /// Morse complexes (yielded by [`MorseMatching::construct_morse_complex`])
+    /// are general `CellComplex` and typically lose their additional structure.
+    /// Thus, remaining matches are of type `PM`. Commonly these are some form
+    /// of `CoreductionMatching`. If you need more customization over the
+    /// reduction process, compute matchings and construct Morse complexes
+    /// directly, without this helper function.
+    ///
+    /// The return value consists of the first matching (of type `Self`, which
+    /// is in general different from `PM` and now owns `complex`), the further
+    /// matchings performed in each step of the reduction, and the final Morse
+    /// complex, that is no longer reducible via Morse matchings.
+    ///
+    /// A cell complex that can no longer be reduced by Morse matching has no
+    /// invertible incidence values. Thus, if the ring type is a field (all
+    /// nonzero elements are invertible, such as the `Cyclic` class) then all
+    /// incidence values are zero. The Betti numbers then equal the number of
+    /// cells of each dimension.
+    fn full_reduce<PM>(
+        complex: Self::UpperComplex,
+    ) -> (Self, Vec<PM>, CellComplex<Self::LowerModule>)
+    where
+        PM: MorseMatching<
+                UpperCell = u32,
+                Ring = Self::Ring,
+                UpperModule = Self::LowerModule,
+                LowerModule = Self::LowerModule,
+                UpperComplex = CellComplex<Self::LowerModule>,
+            >,
+    {
+        let top_matching = Self::compute_matching(complex);
+        let mut morse_complex = Some(top_matching.construct_morse_complex());
+        let cell_count = morse_complex.as_ref().unwrap().cell_count();
+        let mut further_matchings = Vec::new();
+
+        loop {
+            let next_matching = PM::compute_matching(Option::take(&mut morse_complex).unwrap());
+            if next_matching.critical_cells().len() as u32 == cell_count {
+                return (
+                    top_matching,
+                    further_matchings,
+                    next_matching.extract_upper_complex(),
+                );
+            }
+            morse_complex = Some(next_matching.construct_morse_complex());
+            further_matchings.push(next_matching);
+        }
+    }
+
     /// Return an immutable reference to the owned parent cell complex.
     fn get_upper_complex(&self) -> &Self::UpperComplex;
+
+    /// Return the owned parent cell complex, consuming the matching.
+    fn extract_upper_complex(self) -> Self::UpperComplex;
 
     /// Return the critical cells found by the matching algorithm. These are
     /// primarily used to construct the reduced Morse complex.

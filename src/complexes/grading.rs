@@ -212,7 +212,7 @@ where
             .iter()
             .map(|(key, value)| (key.clone(), *value))
             .collect();
-        map_as_vec.serialize(serializer)
+        (self.default_grade, map_as_vec).serialize(serializer)
     }
 }
 
@@ -224,8 +224,10 @@ where
     where
         D: Deserializer<'de>,
     {
-        let map_as_vec = Vec::<(B, u32)>::deserialize(deserializer)?;
-        Ok(Self::from_iter(map_as_vec))
+        let (default_grade, map_as_vec) = <(u32, Vec<(B, u32)>)>::deserialize(deserializer)?;
+        let mut grader = HashMapGrader::from_iter(map_as_vec);
+        grader.set_default_grade(default_grade);
+        Ok(grader)
     }
 }
 

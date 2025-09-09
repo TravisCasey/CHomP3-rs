@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::fmt::Debug;
+
 use crate::{ModuleLike, RingLike};
 
 /// Trait for types representing cell complexes over modules.
@@ -12,7 +14,7 @@ use crate::{ModuleLike, RingLike};
 pub trait ComplexLike {
     /// Cell type of the complex. Must be equivalent to
     /// `<Self::Module as ModuleLike>::Cell`
-    type Cell: Clone + Eq;
+    type Cell: Clone + Debug + Eq;
 
     /// Ring type of chains emitted by the complex. Must be equivalent to
     /// `<Self::Module as ModuleLike>::Ring`
