@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::collections::hash_map::{Entry, OccupiedEntry};
 use std::collections::{HashMap, hash_map};
 use std::convert::From;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
@@ -141,7 +142,21 @@ impl<B: Clone + Debug + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone
     }
 
     fn insert_or_add(&mut self, cell: Self::Cell, coef: Self::Ring) {
-        *self.map.entry(cell).or_insert_with(|| R::zero()) += coef;
+        if coef != Self::Ring::zero() {
+            match self.map.entry(cell) {
+                Entry::Occupied(mut o) => {
+                    if coef.clone() + o.get().clone() == Self::Ring::zero() {
+                        o.remove();
+                    } else {
+                        *o.get_mut() += coef;
+                    }
+                },
+                Entry::Vacant(v) => {
+                    v.insert(coef);
+                }
+            }
+        }
+        
     }
 }
 

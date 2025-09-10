@@ -43,8 +43,8 @@ pub trait RingLike: AlgebraicBase + Additive + Multiplicative {
 }
 
 /// The expected functionality for types implementing algebraic modules over the
-/// coefficient ring `R`. Objects of a type satisfying `ModuleLike` represent
-/// `R`-linear combinations of objects of the basis type `C`.
+/// coefficient ring `Self::Ring`. Objects of a type satisfying `ModuleLike` represent
+/// linear combinations of objects of the basis type `Self::Cell`.
 pub trait ModuleLike:
     AlgebraicBase
     + Additive
@@ -74,12 +74,8 @@ pub trait ModuleLike:
     /// multiplies each coefficient in `self` by `coef`.
     fn scalar_mul(self, coef: Self::Ring) -> Self;
 
-    /// Returns an iterator over all (cell, coefficient) pairs in the module.
-    ///
-    /// This iterator provides immutable access to the terms in the module,
-    /// yielding pairs of cells and their corresponding coefficients. It may be
-    /// efficient to filter out terms with zero coefficient, but it is not
-    /// required.
+    /// Returns an iterator over all (cell, coefficient) pairs in the module
+    /// for which coefficient is nonzero.
     fn iter(&self) -> Self::Iter<'_>;
 
     /// If `cell` is not in `self`, insert it with coefficient `coef`. Else, add
