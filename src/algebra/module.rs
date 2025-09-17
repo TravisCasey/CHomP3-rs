@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::collections::hash_map::{Entry, OccupiedEntry};
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, hash_map};
 use std::convert::From;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
@@ -126,6 +126,10 @@ impl<B: Clone + Debug + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone
         self.map.entry(cell.clone()).or_insert_with(|| R::zero())
     }
 
+    fn remove(&mut self, cell: &B) -> R {
+        self.map.remove(cell).unwrap_or(R::zero())
+    }
+
     fn scalar_mul(mut self, coef: R) -> Self {
         if coef == R::zero() {
             self.clear();
@@ -150,13 +154,12 @@ impl<B: Clone + Debug + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone
                     } else {
                         *o.get_mut() += coef;
                     }
-                },
+                }
                 Entry::Vacant(v) => {
                     v.insert(coef);
                 }
             }
         }
-        
     }
 }
 
@@ -481,6 +484,34 @@ mod tests {
             sh_module,
             HashMapModule::from([
                 ((13, 0), Cyclic::from(21)),
+                ((2, 25), Cyclic::from(4)),
+                ((17, 17), Cyclic::from(18)),
+                ((11, 0), Cyclic::from(0)), // not present
+                ((8, 90), Cyclic::from(10)),
+            ])
+        );
+
+        assert_eq!(rs_module.remove(&10), Cyclic::from(0));
+        assert_eq!(rs_module.remove(&12), Cyclic::from(1));
+        assert_eq!(rs_module.remove(&12), Cyclic::from(0));
+        assert_eq!(sh_module.remove(&(11, 0)), Cyclic::from(0));
+        assert_eq!(sh_module.remove(&(13, 0)), Cyclic::from(21));
+        assert_eq!(sh_module.remove(&(13, 0)), Cyclic::from(0));
+
+        assert_eq!(
+            rs_module,
+            HashMapModule::from([
+                (0, Cyclic::from(2)),
+                (10, Cyclic::from(0)),
+                (12, Cyclic::from(0)),
+                (20, Cyclic::from(0)), // not present
+                (13, Cyclic::from(1)),
+            ])
+        );
+        assert_eq!(
+            sh_module,
+            HashMapModule::from([
+                ((13, 0), Cyclic::from(0)),
                 ((2, 25), Cyclic::from(4)),
                 ((17, 17), Cyclic::from(18)),
                 ((11, 0), Cyclic::from(0)), // not present
