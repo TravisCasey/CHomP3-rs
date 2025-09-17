@@ -510,8 +510,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        CellComplex, Cube, CubicalComplex, Cyclic, HashMapGrader, HashMapModule, ModuleLike,
-        Orthant, RingLike, TopCubeGrader,
+        CellComplex, Cube, CubicalComplex, Cyclic, Grader, HashMapGrader, HashMapModule,
+        ModuleLike, Orthant, RingLike, TopCubeGrader,
     };
 
     type TestModule = HashMapModule<u32, Cyclic<5>>;

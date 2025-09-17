@@ -5,7 +5,7 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use crate::{CellComplex, ComplexLike, MatchResult, ModuleLike, RingLike};
+use crate::{CellComplex, ComplexLike, Grader, MatchResult, ModuleLike, RingLike};
 
 /// The interface for a type implementing an acyclic partial matching used in
 /// discrete Morse theoretic cell complex reductions.

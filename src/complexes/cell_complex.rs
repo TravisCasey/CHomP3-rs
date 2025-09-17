@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ComplexLike, ModuleLike};
+use crate::{ComplexLike, Grader, ModuleLike};
 
 /// A simple concrete implementation of a cell complex with vector-based
 /// storage.
@@ -111,16 +111,18 @@ where
             .collect()
     }
 
-    fn grade(&self, cell: &u32) -> u32 {
-        self.grades[*cell as usize]
-    }
-
     fn cell_dimension(&self, cell: &u32) -> u32 {
         self.cell_dimensions[*cell as usize]
     }
 
     fn dimension(&self) -> u32 {
         self.complex_dimension
+    }
+}
+
+impl<M: ModuleLike<Cell = u32>> Grader<u32> for CellComplex<M> {
+    fn grade(&self, cell: &u32) -> u32 {
+        self.grades[*cell as usize]
     }
 }
 

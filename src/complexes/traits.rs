@@ -11,7 +11,7 @@ use crate::{ModuleLike, RingLike};
 /// A cell complex is a mathematical structure composed of cells with defined
 /// boundary and coboundary relationships. This trait provides the core
 /// interface for working with such complexes.
-pub trait ComplexLike {
+pub trait ComplexLike: Grader<Self::Cell> {
     /// Cell type of the complex. Must be equivalent to
     /// `<Self::Module as ModuleLike>::Cell`
     type Cell: Clone + Debug + Eq;
@@ -129,12 +129,6 @@ pub trait ComplexLike {
 
     /// Returns the topological dimension of a specific cell.
     fn cell_dimension(&self, cell: &Self::Cell) -> u32;
-
-    /// Returns the grade (filtration level) of the specified cell.
-    ///
-    /// Grades are used in filtered complexes for persistent homology
-    /// computations.
-    fn grade(&self, cell: &Self::Cell) -> u32;
 }
 
 /// Trait for assigning grades (filtration levels) to cells in a complex.

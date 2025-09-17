@@ -79,7 +79,7 @@ use std::ops::{Index, IndexMut};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ComplexLike, CubeIterator, Grader, ModuleLike, RingLike};
+use crate::{ComplexLike, CubeIterator, Grader, ModuleLike, RingLike, TopCubeGrader};
 
 /// An orthant is an interval of cubical cells in the ambient space between a
 /// vertex and the cube it is a face of that is greater along each axis. Each
@@ -631,8 +631,16 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
     fn cell_dimension(&self, cell: &Cube) -> u32 {
         cell.dimension()
     }
+}
 
+impl<M, G: Grader<Cube>> Grader<Cube> for CubicalComplex<M, G> {
     fn grade(&self, cell: &Cube) -> u32 {
+        self.grading_function.grade(cell)
+    }
+}
+
+impl<M, G: Grader<Orthant>> Grader<Orthant> for CubicalComplex<M, TopCubeGrader<G>> {
+    fn grade(&self, cell: &Orthant) -> u32 {
         self.grading_function.grade(cell)
     }
 }
