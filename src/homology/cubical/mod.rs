@@ -2,13 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-pub use coreduction::CoreductionMatching;
-pub use cubical::TopCubicalMatching;
-pub use morse::MatchResult;
-pub use traits::MorseMatching;
+pub use orthant_matching::OrthantMatching;
+pub use subgrid::Subgrid;
+pub use top_cubical::TopCubicalMatching;
 
-mod coreduction;
-mod cubical;
-mod morse;
-mod traits;
-mod util;
+mod orthant_matching;
+mod subgrid;
+mod top_cubical;
