@@ -77,6 +77,7 @@ use std::fmt::{Display, Formatter};
 use std::iter::{FromIterator, zip};
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
+use std::slice::{Iter, IterMut};
 
 use serde::{Deserialize, Serialize};
 
@@ -130,12 +131,12 @@ impl Orthant {
     }
 
     /// Create an iterator over the coordinates.
-    pub fn iter(&self) -> impl Iterator<Item = &i32> {
+    pub fn iter(&self) -> Iter<'_, i32> {
         self.coordinates.iter()
     }
 
     /// Create a mutable iterator over the coordinates.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut i32> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, i32> {
         self.coordinates.iter_mut()
     }
 
