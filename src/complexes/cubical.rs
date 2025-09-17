@@ -542,6 +542,11 @@ impl<M, G> CubicalComplex<M, G> {
         self.minimum_orthant.as_slice() <= cube.base().as_slice()
             && cube.base().as_slice() <= self.maximum_orthant.as_slice()
     }
+
+    /// Return an immutable reference to the grading function.
+    pub fn grader(&self) -> &G {
+        &self.grading_function
+    }
 }
 
 impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> ComplexLike

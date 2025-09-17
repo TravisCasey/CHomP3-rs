@@ -227,6 +227,12 @@ where
     pub fn set_min_grade(&mut self, min_grade: Option<u32>) {
         self.min_grade = min_grade;
     }
+
+    /// Return an immutable reference to the wrapped grading function for
+    /// orthants (or, top-dimensional cubes).
+    pub fn orthant_grader(&self) -> &G {
+        &self.orthant_grader
+    }
 }
 
 impl<G> Grader<Cube> for TopCubeGrader<G>
