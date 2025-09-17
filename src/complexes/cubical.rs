@@ -71,6 +71,7 @@
 //! assert_eq!(complex.cell_boundary(&edge), HashMapModule::from([(vertex, -Cyclic::one())]));
 //! ```
 
+use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::iter::{FromIterator, zip};
@@ -211,6 +212,18 @@ impl Display for Orthant {
             write!(f, "{}", coord)?;
         }
         write!(f, ")")
+    }
+}
+
+impl PartialOrd for Orthant {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Orthant {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.coordinates.cmp(&other.coordinates)
     }
 }
 
