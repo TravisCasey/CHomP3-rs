@@ -200,7 +200,7 @@ where
         match orthant_matching {
             OrthantMatching::Critical { .. } => MatchResult::Ace { cell: cube },
             OrthantMatching::Leaf { match_axis, .. } => {
-                let incidence = if ((extent % (1 << match_axis)).count_ones()) % 2 == 0 {
+                let incidence = if ((extent % (1 << match_axis)).count_ones()).is_multiple_of(2) {
                     -UM::Ring::one()
                 } else {
                     UM::Ring::one()
