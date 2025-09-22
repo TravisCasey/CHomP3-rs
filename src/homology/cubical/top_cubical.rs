@@ -409,25 +409,53 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
     use crate::{
         CellComplex, CoreductionMatching, Cube, CubicalComplex, Cyclic, Grader, HashMapGrader,
         HashMapModule, ModuleLike, Orthant, TopCubeGrader,
     };
 
-    fn load_cube_torus_complex()
+    fn generate_top_cube_torus_orthants() -> Vec<Orthant> {
+        let mut top_cubes = Vec::new();
+        for x in 0..7 {
+            for y in 0..7 {
+                // Create hole in the middle
+                if x == 3 && y == 3 {
+                    continue;
+                }
+                for z in 0..3 {
+                    if z == 1 {
+                        // Make the torus hollow
+                        if (x == 1 || x == 5) && (1..=5).contains(&y) {
+                            continue;
+                        }
+                        if (y == 1 || y == 5) && (1..=5).contains(&x) {
+                            continue;
+                        }
+                    }
+                    top_cubes.push(Orthant::from([x, y, z]));
+                }
+            }
+        }
+
+        top_cubes
+    }
+
+    pub fn top_cube_torus_hashmap()
     -> CubicalComplex<HashMapModule<Cube, Cyclic<2>>, TopCubeGrader<HashMapGrader<Orthant>>> {
-        let serialized_complex = fs::read_to_string("testing/complexes/cube_torus_complex.json")
-            .expect("Testing complex file not found.");
-        serde_json::from_str(&serialized_complex)
-            .expect("Testing complex could not be deserialized.")
+        let minimum = Orthant::from([0, 0, 0]);
+        let maximum = Orthant::from([7, 7, 3]);
+
+        let top_cubes = generate_top_cube_torus_orthants();
+
+        let grader = TopCubeGrader::new(HashMapGrader::uniform(top_cubes, 0, 1), Some(0));
+
+        CubicalComplex::new(minimum, maximum, grader)
     }
 
     #[test]
     fn full_reduce_cube_torus_complex() {
-        let complex = load_cube_torus_complex();
+        let complex = top_cube_torus_hashmap();
         let (_top_matching, _further_matchings, morse_complex) = TopCubicalMatching::full_reduce::<
             CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
         >(complex);
@@ -446,7 +474,7 @@ mod tests {
 
     #[test]
     fn individual_matches_cube_torus_complex() {
-        let complex = load_cube_torus_complex();
+        let complex = top_cube_torus_hashmap();
         let matching = TopCubicalMatching::compute_matching(complex);
 
         let cube = Cube::vertex(Orthant::from([0, 0, 0]));

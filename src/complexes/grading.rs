@@ -12,8 +12,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
 use super::traits::Grader;
 
 /// A grader that stores cell grades in a `HashMap`. Cells (instances of the
@@ -196,38 +194,6 @@ where
         T: IntoIterator<Item = (B, u32)>,
     {
         Self::from_map(HashMap::from_iter(iter))
-    }
-}
-
-impl<B> Serialize for HashMapGrader<B>
-where
-    B: Clone + Eq + Hash + Serialize,
-{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let map_as_vec: Vec<(B, u32)> = self
-            .grades
-            .iter()
-            .map(|(key, value)| (key.clone(), *value))
-            .collect();
-        (self.default_grade, map_as_vec).serialize(serializer)
-    }
-}
-
-impl<'de, B> Deserialize<'de> for HashMapGrader<B>
-where
-    B: Clone + Eq + Hash + Deserialize<'de>,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let (default_grade, map_as_vec) = <(u32, Vec<(B, u32)>)>::deserialize(deserializer)?;
-        let mut grader = HashMapGrader::from_iter(map_as_vec);
-        grader.set_default_grade(default_grade);
-        Ok(grader)
     }
 }
 

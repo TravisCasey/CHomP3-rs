@@ -1,14 +1,26 @@
 [package]
 name = "chomp3rs"
 version = "0.1.0"
+authors = ["Travis Casey"]
 edition = "2024"
 description = "Computational Homology Project 3"
 readme = "README.md"
+repository = "https://github.com/TravisCasey/CHomP3-rs"
 license = "MPL-2.0"
 keywords = ["homology", "topology", "dynamical systems"]
 categories = ["mathematics"]
+resolver = "3"
+
+[[bench]]
+name = "top_cube_sn"
+harness = false
 
 [dependencies]
 flint-sys = "0.7.3"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.143"
+
+[workspace]
+members = ["test_utilities"]
+
+[dev-dependencies]
+divan = "0.1.21"
+test_utilities = { path = "test_utilities" }

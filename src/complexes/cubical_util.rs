@@ -8,8 +8,6 @@ use std::iter::zip;
 use std::mem::transmute;
 use std::slice::ChunksExact;
 
-use serde::{Deserialize, Serialize};
-
 use super::cubical::{Cube, Orthant};
 use super::traits::Grader;
 
@@ -193,7 +191,7 @@ impl Iterator for CubeIterator {
 /// let grade = cube_grader.grade(&vertex);
 /// assert_eq!(grade, 1); // minimum of surrounding grades: 1, 2, 3, 4
 /// ```
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct TopCubeGrader<G>
 where
     G: Grader<Orthant>,
@@ -426,7 +424,7 @@ impl<'a> TrieNode<'a> {
 /// simplifies trie structure and trackers and more easily enables the
 /// compression optimization. The default grade, however, can be modified via
 /// the [`OrthantTrie::set_default_grade`] method.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct OrthantTrie {
     trie: Vec<u16>,
     default_grade: u32,

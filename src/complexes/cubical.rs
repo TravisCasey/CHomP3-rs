@@ -79,8 +79,6 @@ use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 use std::slice::{Iter, IterMut};
 
-use serde::{Deserialize, Serialize};
-
 use crate::{ComplexLike, CubeIterator, Grader, ModuleLike, RingLike, TopCubeGrader};
 
 /// An orthant is an interval of cubical cells in the ambient space between a
@@ -89,7 +87,7 @@ use crate::{ComplexLike, CubeIterator, Grader, ModuleLike, RingLike, TopCubeGrad
 ///
 /// The implementation of `Orthant` is similar to a vector of coordinates (of
 /// type `i16`) with a fixed length after construction.
-#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Orthant {
     coordinates: Vec<i16>,
 }
@@ -262,7 +260,7 @@ impl Ord for Orthant {
 /// assert_eq!(square.dimension(), 2);
 /// assert_eq!(square.extent(), vec![true, true]); // extent 11
 /// ```
-#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Cube {
     base_orthant: Orthant,
     dual_orthant: Orthant,
@@ -476,7 +474,7 @@ impl Display for Cube {
 /// assert!(complex.contains_cube(&vertex));
 /// let boundary = complex.cell_boundary(&vertex);
 /// ```
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct CubicalComplex<M, G> {
     minimum_orthant: Orthant,
     maximum_orthant: Orthant,

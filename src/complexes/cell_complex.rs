@@ -2,8 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use serde::{Deserialize, Serialize};
-
 use crate::{ComplexLike, Grader, ModuleLike};
 
 /// A simple concrete implementation of a cell complex with vector-based
@@ -14,7 +12,7 @@ use crate::{ComplexLike, Grader, ModuleLike};
 /// boundary, and coboundary data explicitly stored in parallel vectors for
 /// efficient access. However, there needs to be few enough cells that the
 /// memory overhead of storing these vectors is acceptable.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CellComplex<M>
 where
     M: ModuleLike<Cell = u32>,

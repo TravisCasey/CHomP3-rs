@@ -388,7 +388,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
 
     use super::*;
     use crate::{Cyclic, HashMapGrader, HashMapModule};
@@ -446,13 +445,14 @@ mod tests {
 
     #[test]
     fn match_cube_torus_complex_subgrid() {
-        let serialized_complex = fs::read_to_string("testing/complexes/cube_torus_complex.json")
-            .expect("Testing complex file not found.");
-        let complex: CubicalComplex<
+        let grader = TopCubeGrader::new(
+            HashMapGrader::uniform([Orthant::from([1, 1, 1])], 1, 0),
+            Some(0),
+        );
+        let complex = CubicalComplex::<
             HashMapModule<Cube, Cyclic<2>>,
             TopCubeGrader<HashMapGrader<Orthant>>,
-        > = serde_json::from_str(&serialized_complex)
-            .expect("Testing complex could not be deserialized.");
+        >::new(Orthant::from([0, 0, 0]), Orthant::from([1, 1, 1]), grader);
         let mut subgrid = Subgrid::new(
             &complex,
             Orthant::from([0, 0, 0]),

@@ -506,12 +506,11 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
-    use std::fs;
 
     use super::*;
     use crate::{
         CellComplex, Cube, CubicalComplex, Cyclic, Grader, HashMapGrader, HashMapModule,
-        ModuleLike, Orthant, RingLike, TopCubeGrader,
+        ModuleLike, Orthant, RingLike,
     };
 
     type TestModule = HashMapModule<u32, Cyclic<5>>;
@@ -737,76 +736,5 @@ mod tests {
         }
 
         assert_eq!(critical_count + matched_count, all_cells.len());
-    }
-
-    #[test]
-    fn full_reduce_triangle_complex() {
-        let serialized_complex = fs::read_to_string("testing/complexes/triangle_complex.json")
-            .expect("Testing complex file not found.");
-        let complex: CellComplex<HashMapModule<u32, Cyclic<2>>> =
-            serde_json::from_str(&serialized_complex)
-                .expect("Testing complex could not be deserialized.");
-        let (_top_matching, _further_matchings, morse_complex) = CoreductionMatching::full_reduce::<
-            CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
-        >(complex);
-
-        let mut cells_by_dimension = [Vec::new(), Vec::new(), Vec::new()];
-        for cell in morse_complex.cell_iter() {
-            if morse_complex.grade(&cell) == 0 {
-                cells_by_dimension[morse_complex.cell_dimension(&cell) as usize].push(cell);
-                assert_eq!(morse_complex.cell_boundary(&cell), HashMapModule::new());
-            }
-        }
-        assert_eq!(cells_by_dimension[0].len(), 1, "0-dimensional cells");
-        assert_eq!(cells_by_dimension[1].len(), 0, "1-dimensional cells");
-        assert_eq!(cells_by_dimension[2].len(), 0, "2-dimensional cells");
-    }
-
-    #[test]
-    fn full_reduce_cube_torus_complex() {
-        let serialized_complex = fs::read_to_string("testing/complexes/cube_torus_complex.json")
-            .expect("Testing complex file not found.");
-        let complex: CubicalComplex<
-            HashMapModule<Cube, Cyclic<2>>,
-            TopCubeGrader<HashMapGrader<Orthant>>,
-        > = serde_json::from_str(&serialized_complex)
-            .expect("Testing complex could not be deserialized.");
-        let (_top_matching, _further_matchings, morse_complex) = CoreductionMatching::full_reduce::<
-            CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
-        >(complex);
-
-        let mut cells_by_dimension = [Vec::new(), Vec::new(), Vec::new()];
-        for cell in morse_complex.cell_iter() {
-            if morse_complex.grade(&cell) == 0 {
-                cells_by_dimension[morse_complex.cell_dimension(&cell) as usize].push(cell);
-                assert_eq!(morse_complex.cell_boundary(&cell), HashMapModule::new());
-            }
-        }
-        assert_eq!(cells_by_dimension[0].len(), 1, "0-dimensional cells");
-        assert_eq!(cells_by_dimension[1].len(), 2, "1-dimensional cells");
-        assert_eq!(cells_by_dimension[2].len(), 1, "2-dimensional cells");
-    }
-
-    #[test]
-    fn full_reduce_figure_eight_complex() {
-        let serialized_complex = fs::read_to_string("testing/complexes/figure_eight_complex.json")
-            .expect("Testing complex file not found.");
-        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Cube>> =
-            serde_json::from_str(&serialized_complex)
-                .expect("Testing complex could not be deserialized.");
-        let (_top_matching, _further_matchings, morse_complex) = CoreductionMatching::full_reduce::<
-            CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
-        >(complex);
-
-        let mut cells_by_dimension = [Vec::new(), Vec::new(), Vec::new()];
-        for cell in morse_complex.cell_iter() {
-            if morse_complex.grade(&cell) == 0 {
-                cells_by_dimension[morse_complex.cell_dimension(&cell) as usize].push(cell);
-                assert_eq!(morse_complex.cell_boundary(&cell), HashMapModule::new());
-            }
-        }
-        assert_eq!(cells_by_dimension[0].len(), 1, "0-dimensional cells");
-        assert_eq!(cells_by_dimension[1].len(), 2, "1-dimensional cells");
-        assert_eq!(cells_by_dimension[2].len(), 0, "2-dimensional cells");
     }
 }

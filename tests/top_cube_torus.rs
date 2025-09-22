@@ -1,0 +1,54 @@
+use chomp3rs::{
+    CellComplex, ComplexLike, CoreductionMatching, Cube, Cyclic, Grader, HashMapGrader,
+    HashMapModule, ModuleLike, MorseMatching, Orthant, OrthantTrie, TopCubicalMatching,
+};
+use test_utilities::{top_cube_torus_hashmap, top_cube_torus_trie};
+
+fn verify_morse_complex(morse_complex: &CellComplex<HashMapModule<u32, Cyclic<2>>>) {
+    let correct_dimensions = vec![0, 1, 1, 2];
+    let mut dimensions = Vec::new();
+    for cell in morse_complex.cell_iter() {
+        if morse_complex.grade(&cell) != 0 {
+            continue;
+        }
+        dimensions.push(morse_complex.cell_dimension(&cell));
+
+        assert_eq!(
+            morse_complex.cell_boundary_if(&cell, |bd_cell| morse_complex.grade(bd_cell) == 0),
+            HashMapModule::new()
+        );
+        assert_eq!(
+            morse_complex.cell_coboundary_if(&cell, |cbd_cell| morse_complex.grade(cbd_cell) == 0),
+            HashMapModule::new()
+        );
+    }
+    dimensions.sort();
+    assert_eq!(dimensions, correct_dimensions);
+}
+
+#[test]
+fn top_cube_reduce_torus_hashmap() {
+    let complex = top_cube_torus_hashmap();
+
+    let morse_complex = TopCubicalMatching::<
+        HashMapModule<Cube, Cyclic<2>>,
+        HashMapGrader<Orthant>,
+    >::full_reduce::<
+        CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
+    >(complex).2;
+
+    verify_morse_complex(&morse_complex);
+}
+
+#[test]
+fn top_cube_reduce_torus_trie() {
+    let complex = top_cube_torus_trie();
+
+    let morse_complex =
+        TopCubicalMatching::<HashMapModule<Cube, Cyclic<2>>, OrthantTrie>::full_reduce::<
+            CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
+        >(complex)
+        .2;
+
+    verify_morse_complex(&morse_complex);
+}
