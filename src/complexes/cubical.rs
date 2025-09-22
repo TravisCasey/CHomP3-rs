@@ -88,16 +88,16 @@ use crate::{ComplexLike, CubeIterator, Grader, ModuleLike, RingLike, TopCubeGrad
 /// [`Cube`] is defined by two orthant instances.
 ///
 /// The implementation of `Orthant` is similar to a vector of coordinates (of
-/// type `i32`) with a fixed length after construction.
+/// type `i16`) with a fixed length after construction.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Orthant {
-    coordinates: Vec<i32>,
+    coordinates: Vec<i16>,
 }
 
 impl Orthant {
     /// Create a new orthant with given coordinates.
     #[must_use]
-    pub fn new(coordinates: Vec<i32>) -> Self {
+    pub fn new(coordinates: Vec<i16>) -> Self {
         Self { coordinates }
     }
 
@@ -117,7 +117,7 @@ impl Orthant {
 
     /// Get a reference to the coordinates as a slice.
     #[must_use]
-    pub fn as_slice(&self) -> &[i32] {
+    pub fn as_slice(&self) -> &[i16] {
         &self.coordinates
     }
 
@@ -126,35 +126,35 @@ impl Orthant {
     /// # Warning
     /// Modifying the length of the returned slice may cause unexpected behavior
     /// and should be avoided. Only modify the values of existing elements.
-    pub fn as_mut_slice(&mut self) -> &mut [i32] {
+    pub fn as_mut_slice(&mut self) -> &mut [i16] {
         &mut self.coordinates
     }
 
     /// Create an iterator over the coordinates.
-    pub fn iter(&self) -> Iter<'_, i32> {
+    pub fn iter(&self) -> Iter<'_, i16> {
         self.coordinates.iter()
     }
 
     /// Create a mutable iterator over the coordinates.
-    pub fn iter_mut(&mut self) -> IterMut<'_, i32> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, i16> {
         self.coordinates.iter_mut()
     }
 
     /// Safely get a reference to the coordinate at the given index.
     #[must_use]
-    pub fn get(&self, index: usize) -> Option<&i32> {
+    pub fn get(&self, index: usize) -> Option<&i16> {
         self.coordinates.get(index)
     }
 
     /// Safely get a mutable reference to the coordinate at the given index.
     #[must_use]
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut i32> {
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut i16> {
         self.coordinates.get_mut(index)
     }
 }
 
 impl Index<usize> for Orthant {
-    type Output = i32;
+    type Output = i16;
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.coordinates[index]
@@ -167,38 +167,38 @@ impl IndexMut<usize> for Orthant {
     }
 }
 
-impl FromIterator<i32> for Orthant {
-    fn from_iter<T: IntoIterator<Item = i32>>(iter: T) -> Self {
+impl FromIterator<i16> for Orthant {
+    fn from_iter<T: IntoIterator<Item = i16>>(iter: T) -> Self {
         Self::new(iter.into_iter().collect())
     }
 }
 
-impl<const N: usize> From<[i32; N]> for Orthant {
-    fn from(array: [i32; N]) -> Self {
+impl<const N: usize> From<[i16; N]> for Orthant {
+    fn from(array: [i16; N]) -> Self {
         Self::new(array.to_vec())
     }
 }
 
-impl<const N: usize> From<&[i32; N]> for Orthant {
-    fn from(array: &[i32; N]) -> Self {
+impl<const N: usize> From<&[i16; N]> for Orthant {
+    fn from(array: &[i16; N]) -> Self {
         Self::new(array.to_vec())
     }
 }
 
-impl<const N: usize> From<&mut [i32; N]> for Orthant {
-    fn from(array: &mut [i32; N]) -> Self {
+impl<const N: usize> From<&mut [i16; N]> for Orthant {
+    fn from(array: &mut [i16; N]) -> Self {
         Self::new(array.to_vec())
     }
 }
 
-impl From<&[i32]> for Orthant {
-    fn from(slice: &[i32]) -> Self {
+impl From<&[i16]> for Orthant {
+    fn from(slice: &[i16]) -> Self {
         Self::new(slice.to_vec())
     }
 }
 
-impl From<&mut [i32]> for Orthant {
-    fn from(slice: &mut [i32]) -> Self {
+impl From<&mut [i16]> for Orthant {
+    fn from(slice: &mut [i16]) -> Self {
         Self::new(slice.to_vec())
     }
 }
@@ -369,13 +369,13 @@ impl Cube {
 
     /// Safely get the base coordinate at specific index.
     #[must_use]
-    pub fn base_coord(&self, index: usize) -> Option<i32> {
+    pub fn base_coord(&self, index: usize) -> Option<i16> {
         self.base_orthant.get(index).copied()
     }
 
     /// Safely get the dual coordinate at specific index.
     #[must_use]
-    pub fn dual_coord(&self, index: usize) -> Option<i32> {
+    pub fn dual_coord(&self, index: usize) -> Option<i16> {
         self.dual_orthant.get(index).copied()
     }
 

@@ -4,7 +4,7 @@
 
 pub use cell_complex::CellComplex;
 pub use cubical::{Cube, CubicalComplex, Orthant};
-pub use cubical_util::{CubeIterator, OrthantIterator, TopCubeGrader};
+pub use cubical_util::{CubeIterator, OrthantIterator, OrthantTrie, TopCubeGrader};
 pub use grading::HashMapGrader;
 pub use traits::{ComplexLike, Grader};
 

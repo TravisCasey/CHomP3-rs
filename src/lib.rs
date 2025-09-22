@@ -13,7 +13,7 @@ pub use crate::algebra::{
 };
 pub use crate::complexes::{
     CellComplex, ComplexLike, Cube, CubeIterator, CubicalComplex, Grader, HashMapGrader, Orthant,
-    OrthantIterator, TopCubeGrader,
+    OrthantIterator, OrthantTrie, TopCubeGrader,
 };
 pub use crate::homology::{CoreductionMatching, MatchResult, MorseMatching, TopCubicalMatching};
 

@@ -5,6 +5,8 @@
 //! Utility types and iterators for cubical complexes.
 
 use std::iter::zip;
+use std::mem::transmute;
+use std::slice::ChunksExact;
 
 use serde::{Deserialize, Serialize};
 
@@ -290,12 +292,550 @@ where
     }
 }
 
+/// Convenience wrapper over slices of the vector in `OrthantTrie` to handle
+/// interpreting the slice as a node in the trie. The trie does not store
+/// instances of this wrapper; instead, slices are wrapped (via the
+/// [`TrieNode::wrap`] method) only when searching the tree.
+enum TrieNode<'a> {
+    Branch {
+        /// The least coordinate in this branch. The bit index (into `bitmap`)
+        /// is computed relative to this minimum coordinate.
+        minimal: i16,
+
+        /// This slice is the same length as `bitmap`. `prior_popcounts[i]` is
+        /// the number of bits set in the subslice `bitmap[0..i]`.
+        prior_popcount: &'a [u16],
+
+        /// Regarded as a slice of bits (16 per word), a bit is set if the
+        /// corresponding coordinate (relative to `minimal`) is present in the
+        /// trie. The index of the next node for this coordinate is given by
+        /// `child_indices[p]`, where `p` is the number of bits set before the
+        /// corresponding bit. Computed using `u16::count_ones` and
+        /// `prior_popcount`.
+        bitmap: &'a [u16],
+
+        /// The indices (in the vector implementing the trie) to children nodes;
+        /// there is 1 entry for each bit set in `bitmap`. If this is a leaf,
+        /// these are instead grades.
+        child_indices: &'a [u32],
+    },
+    Compressed {
+        /// The length of chunks in `chunks` to compare against.
+        comp_len: usize,
+
+        /// Chunks (subslices of multiple 16-bit coordinates) that comprise all
+        /// of the entries of the trie from this node; for small number of
+        /// chunks, this may be faster than several layers of very sparsely
+        /// populated branches. If chunk `i` matches the sub slice of
+        /// coordinates, `child_indices[i]` is its next index or grade.
+        chunks: ChunksExact<'a, i16>,
+
+        /// The indices (in the vector implementing the trie) to children nodes;
+        /// there is 1 entry for each chunk in `chunk`. If this is a leaf, these
+        /// are instead grades.
+        child_indices: &'a [u32],
+    },
+}
+
+impl<'a> TrieNode<'a> {
+    fn wrap(slice: &'a [u16]) -> Self {
+        let discriminant = slice[0];
+        if discriminant == 0 {
+            // Branch node structure:
+            //   [discriminant, minimal, bitmap_len, num_children]
+            //   + bitmap_len * [prior_popcount]
+            //   + bitmap_len * [bitmap]
+            //   + num_children * [child_indices as u32]
+            //   + remainder
+
+            let minimal = slice[1] as i16; // u16 -> i16 reinterprets bits
+            let bitmap_len = slice[2] as usize;
+            let num_children = slice[3] as usize;
+
+            let (prior_popcount, remainder) = slice.split_at(4).1.split_at(bitmap_len);
+            let (bitmap, remainder) = remainder.split_at(bitmap_len);
+            let halved_child_indices = remainder.split_at(2 * num_children).0;
+
+            // &[u16] reinterpreted as &[u32]
+            // align_to fails here, use transmute instead
+            let child_indices = unsafe { transmute::<&[u16], &[u32]>(halved_child_indices) };
+
+            debug_assert_eq!(
+                prior_popcount[bitmap_len - 1] as usize
+                    + bitmap[bitmap_len - 1].count_ones() as usize,
+                num_children,
+                "number of children does not match number of set bits in branch bitmap"
+            );
+
+            Self::Branch {
+                minimal,
+                prior_popcount,
+                bitmap,
+                child_indices,
+            }
+        } else if discriminant == 1 {
+            // Compressed node structure:
+            //   [discriminant, comp_len, num_children]
+            //   + num_children * [comp_len * [comp]]
+            //   + num_children * [child_indices as u32]
+            //   + remainder
+
+            let comp_len = slice[1] as usize;
+            let num_children = slice[2] as usize;
+
+            let (comp_slice, remainder) = slice.split_at(3).1.split_at(comp_len * num_children);
+            let halved_child_indices = remainder.split_at(2 * num_children).0;
+
+            // &[u16] reinterpreted as &[u32]
+            // align_to fails here, use transmute instead
+            let child_indices = unsafe { transmute::<&[u16], &[u32]>(halved_child_indices) };
+
+            unsafe {
+                Self::Compressed {
+                    comp_len,
+                    chunks: comp_slice.align_to().1.chunks_exact(comp_len),
+                    child_indices,
+                }
+            }
+        } else {
+            panic!("Invalid discriminant {discriminant} detected in trie");
+        }
+    }
+}
+
+/// A grader that stores grades for top-dimensional cubes in a cubical complex
+/// in a prefix tree-like structure with alphabet over the possible coordinates
+/// in each dimension.
+///
+/// `OrthantTrie` implements `Grader<Orthant>`, where the [`Orthant`] object
+/// represents the singular top-dimensional cube within that orthant. The height
+/// of the trie is less than or equal to the ambient dimension of the cubical
+/// complex, as each node in the trie is either a branch among possible values
+/// of the coordinate along the corresponding axis, or is a compressed version
+/// of multiple levels of the same.
+///
+/// If there are fewer leaves connected to some node of the trie than some
+/// threshold (set by either the `compression_threshold` argument at
+/// construction or using the default value of 6), then the remaining
+/// coordinates of the `Orthant` objects representing those leaves are instead
+/// stored and compared against the orthant being graded directly. This can
+/// speed up queries in very sparse, high-dimensional spaces, where many
+/// top-dimensional cubes are not included and instead given the default grade.
+///
+/// Notably, the trie itself cannot be mutated after construction. This
+/// simplifies trie structure and trackers and more easily enables the
+/// compression optimization. The default grade, however, can be modified via
+/// the [`OrthantTrie::set_default_grade`] method.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OrthantTrie {
+    trie: Vec<u16>,
+    default_grade: u32,
+}
+
+impl OrthantTrie {
+    const DEFAULT_COMPRESSION_THRESHOLD: usize = 6;
+
+    /// Construct an `OrthantTrie` holding the grade relationship in
+    /// `orthant_grades`. All other [`Orthant`] objects are assigned the
+    /// default grade when queried.
+    ///
+    /// Duplicates in the `orthant_grades` parameter are unexpected and will be
+    /// removed. The `compression_threshold` sets the number of leaves connected
+    /// to a node to enable the compression optimization; too few will tend to
+    /// create a taller tree that may have longer access times in sparsely
+    /// populated regions, while too large may create compressed nodes that take
+    /// more time comparing the queried [`Orthant`] directly against possible
+    /// coordinates than would be achieved using the normal trie structure. A
+    /// value of 0 disables the compression entirely.
+    pub fn from_vec_with_threshold(
+        mut orthant_grades: Vec<(Orthant, u32)>,
+        default_grade: u32,
+        compression_threshold: usize,
+    ) -> Self {
+        let mut orthant_trie = Self {
+            trie: Vec::new(),
+            default_grade,
+        };
+
+        if !orthant_grades.is_empty() {
+            orthant_grades.sort_unstable();
+            orthant_grades.dedup();
+            let dimension = orthant_grades[0].0.ambient_dimension() as usize;
+
+            orthant_trie.dfs_construct(&orthant_grades, compression_threshold, 0, dimension);
+        }
+        orthant_trie
+    }
+
+    /// A version of [`OrthantTrie::from_vec_with_threshold`] which uses the
+    /// default compression threshold, 6.
+    pub fn from_vec(orthant_grades: Vec<(Orthant, u32)>, default_grade: u32) -> Self {
+        Self::from_vec_with_threshold(
+            orthant_grades,
+            default_grade,
+            Self::DEFAULT_COMPRESSION_THRESHOLD,
+        )
+    }
+
+    /// This method is identical to [`OrthantTrie::from_vec_with_threshold`]
+    /// after collecting `iter` into a vector.
+    pub fn from_iter_with_threshold(
+        iter: impl IntoIterator<Item = (Orthant, u32)>,
+        default_grade: u32,
+        compression_threshold: usize,
+    ) -> Self {
+        Self::from_vec_with_threshold(
+            iter.into_iter().collect(),
+            default_grade,
+            compression_threshold,
+        )
+    }
+
+    /// This method is identical to [`OrthantTrie::from_vec`] after collecting
+    /// `iter` into a vector.
+    pub fn from_iter(iter: impl IntoIterator<Item = (Orthant, u32)>, default_grade: u32) -> Self {
+        Self::from_iter_with_threshold(iter, default_grade, Self::DEFAULT_COMPRESSION_THRESHOLD)
+    }
+
+    /// A constructor that assigns the grade `uniform_grade` to every
+    /// [`Orthant`] object in `iter` and `default_grade` to every other orthant,
+    /// implicitly. This method is otherwise equivalent to
+    /// [`OrthantTrie::from_vec_with_threshold`].
+    pub fn uniform_with_threshold(
+        iter: impl IntoIterator<Item = Orthant>,
+        uniform_grade: u32,
+        default_grade: u32,
+        compression_threshold: usize,
+    ) -> Self {
+        Self::from_vec_with_threshold(
+            iter.into_iter()
+                .map(|orthant| (orthant, uniform_grade))
+                .collect(),
+            default_grade,
+            compression_threshold,
+        )
+    }
+
+    /// This method is identical to [`OrthantTrie::uniform_with_threshold`] but
+    /// uses the default compression threshold, 6.
+    pub fn uniform(
+        iter: impl IntoIterator<Item = Orthant>,
+        uniform_grade: u32,
+        default_grade: u32,
+    ) -> Self {
+        Self::uniform_with_threshold(
+            iter,
+            uniform_grade,
+            default_grade,
+            Self::DEFAULT_COMPRESSION_THRESHOLD,
+        )
+    }
+
+    /// Get the default grade assigned to all [`Orthant`] objects for which a
+    /// grade is not explicitly stored.
+    pub fn default_grade(&self) -> u32 {
+        self.default_grade
+    }
+
+    /// Set a default grade value assign to all [`Orthant`] objects for which a
+    /// grade is not explicitly stored.
+    pub fn set_default_grade(&mut self, default_grade: u32) {
+        self.default_grade = default_grade;
+    }
+
+    fn dfs_construct(
+        &mut self,
+        orthant_grades: &[(Orthant, u32)],
+        compression_threshold: usize,
+        depth: usize,
+        dimension: usize,
+    ) {
+        debug_assert!(!orthant_grades.is_empty());
+
+        // Compressed (Leaf) node.
+        // Non-leaf nodes (with multiple layers, even) could be implemented
+        // for compression sometimes, but not currently.
+        // Should this condition also depend on the depth?
+        if orthant_grades.len() < compression_threshold {
+            let comp_len = dimension - depth;
+            let num_children = orthant_grades.len();
+
+            self.trie.push(1); // discriminant
+            self.trie.push(comp_len as u16);
+            self.trie.push(num_children as u16);
+
+            // Unsafe to reinterpret &[i16] -> &[u16] and u32 -> &[u16] bitwise
+            unsafe {
+                for (orthant, _grade) in orthant_grades {
+                    self.trie
+                        .extend_from_slice(orthant.as_slice()[depth..].align_to().1);
+                }
+                for (_orthant, grade) in orthant_grades {
+                    self.trie.extend_from_slice([*grade].align_to().1);
+                }
+            }
+
+            return;
+        }
+
+        // Branch nodes
+        // Possibly a leaf, in which case the child index is actually the grade
+        let mut coord_counts = vec![(orthant_grades[0].0[depth], 1)];
+        for (orthant, _grade) in orthant_grades.iter().skip(1) {
+            let last_index = coord_counts.len() - 1;
+            if coord_counts[last_index].0 == orthant[depth] {
+                coord_counts[last_index].1 += 1;
+            } else {
+                coord_counts.push((orthant[depth], 1));
+            }
+        }
+
+        let minimal = coord_counts[0].0;
+        let maximal = coord_counts[coord_counts.len() - 1].0;
+        // 1 bit for each possible coordinate value between (inclusive) minimal
+        // and maximal.
+        let bitmap_len = ((maximal - minimal + 1) as usize).div_ceil(16);
+        let num_children = coord_counts.len();
+        self.trie.push(0); // discriminant
+        self.trie.push(minimal as u16);
+        self.trie.push(bitmap_len as u16);
+        self.trie.push(num_children as u16);
+
+        let popcount_begin_index = self.trie.len();
+        let bitmap_begin_index = self.trie.len() + bitmap_len;
+        self.trie.resize(self.trie.len() + 2 * bitmap_len, 0u16);
+
+        for (coord, _count) in coord_counts.iter() {
+            let bit_index = (coord - minimal) as usize;
+            let bitmap_word_index = bit_index / 16;
+            let bit_flag = 1 << (bit_index % 16);
+            self.trie[bitmap_begin_index + bitmap_word_index] |= bit_flag;
+        }
+
+        for bitmap_word_index in 1..bitmap_len {
+            let popcount_index = popcount_begin_index + bitmap_word_index;
+            let bitmap_index = bitmap_begin_index + bitmap_word_index;
+            self.trie[popcount_index] =
+                self.trie[popcount_index - 1] + self.trie[bitmap_index - 1].count_ones() as u16;
+        }
+
+        // Leaf node: child indices are grades instead of indices
+        if depth + 1 == dimension {
+            unsafe {
+                for (_orthant, grade) in orthant_grades.iter() {
+                    self.trie.extend_from_slice([*grade].align_to().1);
+                }
+            }
+            return;
+        }
+
+        // Else, the child indices point to where the next node starts. This
+        // requires calling `dfs_construct` on each child node first, to get
+        // the node spacing right.
+        let child_begin_index = self.trie.len();
+        // Indices are 32 bit, using two 16 bit words. Treat them as slices
+        // instead of using bit operations to achieve this so there's no
+        // endianness issues (are there any big endian machines nowadays?)
+        self.trie
+            .resize(self.trie.len() + 2 * coord_counts.len(), u16::MAX);
+
+        let mut next_coord_slice;
+        let mut remainder = orthant_grades;
+        for (index, (_coord, count)) in coord_counts.into_iter().enumerate() {
+            let next_node_index = self.trie.len();
+            unsafe {
+                self.trie[child_begin_index + 2 * index..child_begin_index + 2 * index + 2]
+                    .copy_from_slice([next_node_index as u32].align_to().1)
+            };
+            (next_coord_slice, remainder) = remainder.split_at(count);
+            self.dfs_construct(
+                next_coord_slice,
+                compression_threshold,
+                depth + 1,
+                dimension,
+            );
+        }
+    }
+
+    fn search(&self, node_index: usize, coords: &[i16]) -> Option<u32> {
+        if coords.is_empty() {
+            return Some(node_index as u32);
+        }
+
+        if node_index >= self.trie.len() {
+            return None;
+        }
+
+        match TrieNode::wrap(&self.trie[node_index..]) {
+            TrieNode::Branch {
+                minimal,
+                prior_popcount,
+                bitmap,
+                child_indices,
+            } => {
+                if coords[0] < minimal {
+                    return None;
+                }
+
+                // If the bit at this index in the bitmap is not set, coords is not in the trie
+                let bit_index = (coords[0] - minimal) as usize;
+                // Index of the word containing the bit at bit_index
+                let bitmap_word_index = bit_index / 16;
+
+                // Exceeds range of bitmap -> not in trie
+                if bitmap_word_index >= bitmap.len() {
+                    return None;
+                }
+
+                // The word containing the bit at bit_index
+                let bitmap_word = bitmap[bitmap_word_index];
+                // 1 bit set at the correct position to check the bit in bit_word
+                let bit_flag = 1 << (bit_index % 16);
+
+                if bitmap_word & bit_flag == 0 {
+                    return None;
+                }
+
+                let prior_in_word = (bitmap_word & (bit_flag - 1)).count_ones() as usize;
+                let next_node_index = child_indices
+                    [prior_popcount[bitmap_word_index] as usize + prior_in_word]
+                    as usize;
+                self.search(next_node_index, coords.split_at(1).1)
+            }
+            TrieNode::Compressed {
+                comp_len,
+                chunks,
+                child_indices,
+            } => {
+                for (chunk_index, chunk) in chunks.enumerate() {
+                    if coords[..comp_len] == *chunk {
+                        return self.search(
+                            child_indices[chunk_index] as usize,
+                            coords.split_at(comp_len).1,
+                        );
+                    }
+                }
+                None
+            }
+        }
+    }
+}
+
+impl Grader<Orthant> for OrthantTrie {
+    fn grade(&self, orthant: &Orthant) -> u32 {
+        self.search(0, orthant.as_slice())
+            .unwrap_or(self.default_grade)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
     use crate::HashMapGrader;
+
+    #[test]
+    fn test_trie_grader_compressed() {
+        let orthants_and_grades = vec![
+            (Orthant::new(vec![0, 0]), 1),
+            (Orthant::new(vec![0, 1]), 2),
+            (Orthant::new(vec![1, 0]), 3),
+            (Orthant::new(vec![1, 1]), 4),
+        ];
+
+        let grader = OrthantTrie::from_iter(orthants_and_grades, 0);
+
+        // with compression threshold at 6, this is just one compressed node
+        // discriminant 1 -> compressed
+        // length 2
+        // child (grade) count 4
+        let mut correct_trie = vec![1, 2, 4, 0, 0, 0, 1, 1, 0, 1, 1];
+        unsafe {
+            correct_trie.extend_from_slice([1u32].align_to().1);
+            correct_trie.extend_from_slice([2u32].align_to().1);
+            correct_trie.extend_from_slice([3u32].align_to().1);
+            correct_trie.extend_from_slice([4u32].align_to().1);
+        }
+        assert_eq!(grader.trie, correct_trie);
+
+        assert_eq!(grader.grade(&Orthant::new(vec![0, 0])), 1);
+        assert_eq!(grader.grade(&Orthant::new(vec![0, 1])), 2);
+        assert_eq!(grader.grade(&Orthant::new(vec![1, 0])), 3);
+        assert_eq!(grader.grade(&Orthant::new(vec![1, 1])), 4);
+
+        // Test default grade for missing entries
+        assert_eq!(grader.grade(&Orthant::new(vec![2, 2])), 0);
+        assert_eq!(grader.grade(&Orthant::new(vec![-1, 0])), 0);
+    }
+
+    #[test]
+    fn test_trie_grader_uncompressed() {
+        let orthants_and_grades = vec![
+            (Orthant::new(vec![0, 2]), 1),
+            (Orthant::new(vec![0, -1]), 2),
+            (Orthant::new(vec![1, 0]), 3),
+            (Orthant::new(vec![1, 1]), 4),
+            (Orthant::new(vec![17, 4]), 20),
+        ];
+
+        // compression_threshold at 0 -> no compression
+        let grader = OrthantTrie::from_iter_with_threshold(orthants_and_grades, 99, 0);
+
+        // First branch, possible values 0..=17
+        // discriminant 0 -> branch
+        // minimal 0
+        // bitmap len 2
+        // child count 3
+        let mut correct_trie = vec![0, 0, 2, 3, 0, 2, 3, 2];
+        unsafe {
+            correct_trie.extend_from_slice([14u32].align_to().1);
+            correct_trie.extend_from_slice([24u32].align_to().1);
+            correct_trie.extend_from_slice([34u32].align_to().1);
+        }
+        // Second branch, first coord 0, possible values -1..=2
+        // discriminant 0 -> branch
+        // minimal -1
+        // bitmap len 1
+        // child count 2
+        correct_trie.extend_from_slice(&[0, -1i16 as u16, 1, 2, 0, 9]);
+        unsafe {
+            correct_trie.extend_from_slice([2u32].align_to().1);
+            correct_trie.extend_from_slice([1u32].align_to().1);
+        }
+
+        // Third branch, first coord 1, possible values 0..=1
+        // discriminant 0 -> branch
+        // minimal 0
+        // bitmap len 1
+        // child count 2
+        correct_trie.extend_from_slice(&[0, 0, 1, 2, 0, 3]);
+        unsafe {
+            correct_trie.extend_from_slice([3u32].align_to().1);
+            correct_trie.extend_from_slice([4u32].align_to().1);
+        }
+
+        // Fourth branch, first coord 17, possible value 4
+        // discriminant 0 -> branch
+        // minimal 4
+        // bitmap len 1
+        // child count 1
+        correct_trie.extend_from_slice(&[0, 4, 1, 1, 0, 1]);
+        unsafe {
+            correct_trie.extend_from_slice([20u32].align_to().1);
+        }
+
+        assert_eq!(grader.trie, correct_trie);
+
+        assert_eq!(grader.grade(&Orthant::new(vec![0, 2])), 1);
+        assert_eq!(grader.grade(&Orthant::new(vec![0, -1])), 2);
+        assert_eq!(grader.grade(&Orthant::new(vec![1, 0])), 3);
+        assert_eq!(grader.grade(&Orthant::new(vec![1, 1])), 4);
+        assert_eq!(grader.grade(&Orthant::new(vec![17, 4])), 20);
+        assert_eq!(grader.grade(&Orthant::new(vec![15, 4])), 99);
+        assert_eq!(grader.grade(&Orthant::new(vec![-20, 0])), 99);
+        assert_eq!(grader.grade(&Orthant::new(vec![300, -1])), 99);
+    }
 
     #[test]
     fn test_orthant_iterator() {
