@@ -61,6 +61,8 @@ where
     boundaries: Vec<LM>,
     projection: HashMap<Cube, u32>,
     gradient: HashMap<Orthant, HashMap<u32, HashMapModule<u32, UM::Ring>>>,
+    maximum_kept_grade: u32,
+    maximum_kept_dimension: u32,
 }
 
 impl<UM, G> TopCubicalMatching<UM, G>
@@ -68,19 +70,33 @@ where
     UM: ModuleLike<Cell = Cube>,
     G: Grader<Orthant>,
 {
-    /// Initialize a matching with default options (cells of all dimensions and
-    /// grades are kept).
+    /// Initialize a matching with options to set the maximum grade and maximum
+    /// dimension of cells considered in the matching.
+    ///
+    /// This behavior can be disabled by setting the corresponding option to
+    /// `None`; the `Default` implementation for this type uses values of `None`
+    /// for both.
+    ///
+    /// However, this can be a key optimization when computing (co)homology only
+    /// up to a certain dimension or when the complex is embedded in a larger
+    /// complex of greater grade, but you only need the (co)homology of the
+    /// embedded complex. Note, however, that setting the maximum dimension to
+    /// `d` will only guarantee accuracy of homology up to dimensions `d - 1`.
+    /// As matchings are computed independently of grades, there is no
+    /// corresponding issue for the maximum grade option.
     ///
     /// No matching is performed until [`TopCubicalMatching::compute_matching`]
     /// has been called and thus most methods from the [`MorseMatching`] trait
     /// implementation will panic if called before.
-    pub fn new() -> Self {
+    pub fn new(maximum_kept_grade: Option<u32>, maximum_kept_dimension: Option<u32>) -> Self {
         Self {
             complex: None,
             critical_cells: Vec::new(),
             boundaries: Vec::new(),
             projection: HashMap::new(),
             gradient: HashMap::new(),
+            maximum_kept_grade: maximum_kept_grade.unwrap_or(u32::MAX),
+            maximum_kept_dimension: maximum_kept_dimension.unwrap_or(u32::MAX),
         }
     }
 }
@@ -91,7 +107,7 @@ where
     G: Grader<Orthant>,
 {
     fn default() -> Self {
-        Self::new()
+        Self::new(None, None)
     }
 }
 
@@ -311,8 +327,8 @@ where
                 self.get_upper_complex().unwrap(),
                 minimum_orthant,
                 maximum_orthant,
-                u32::MAX,
-                u32::MAX,
+                self.maximum_kept_grade,
+                self.maximum_kept_dimension,
             );
 
             let base_critical_orthant = subgrid.match_subgrid();
@@ -473,7 +489,7 @@ mod tests {
     #[test]
     fn full_reduce_cube_torus_complex() {
         let complex = top_cube_torus_hashmap();
-        let mut matching = TopCubicalMatching::new();
+        let mut matching = TopCubicalMatching::default();
         let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
         let mut cells_by_dimension = [Vec::new(), Vec::new(), Vec::new()];
@@ -491,7 +507,7 @@ mod tests {
     #[test]
     fn individual_matches_cube_torus_complex() {
         let complex = top_cube_torus_hashmap();
-        let mut matching = TopCubicalMatching::new();
+        let mut matching = TopCubicalMatching::default();
         matching.compute_matching(complex);
 
         let cube = Cube::vertex(Orthant::from([0, 0, 0]));
