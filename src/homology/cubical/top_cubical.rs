@@ -50,12 +50,13 @@ use crate::{
 /// of the running time. By processing nearby orthants together and caching
 /// grading results (when there is a reasonable number of surrounding top-cubes,
 /// whose grades can be stored contiguously) we further improve the efficiency.
+#[derive(Clone, Debug)]
 pub struct TopCubicalMatching<UM, G, LM = HashMapModule<u32, <UM as ModuleLike>::Ring>>
 where
     UM: ModuleLike<Cell = Cube>,
     G: Grader<Orthant>,
 {
-    complex: CubicalComplex<UM, TopCubeGrader<G>>,
+    complex: Option<CubicalComplex<UM, TopCubeGrader<G>>>,
     critical_cells: Vec<Cube>,
     boundaries: Vec<LM>,
     projection: HashMap<Cube, u32>,
@@ -67,10 +68,30 @@ where
     UM: ModuleLike<Cell = Cube>,
     G: Grader<Orthant>,
 {
-    /// Convenience function to call the identically named method from the
-    /// [`MorseMatching`] implementation with the default `LM` type parameter.
-    pub fn compute_matching(complex: CubicalComplex<UM, TopCubeGrader<G>>) -> Self {
-        <Self as MorseMatching>::compute_matching(complex)
+    /// Initialize a matching with default options (cells of all dimensions and
+    /// grades are kept).
+    ///
+    /// No matching is performed until [`TopCubicalMatching::compute_matching`]
+    /// has been called and thus most methods from the [`MorseMatching`] trait
+    /// implementation will panic if called before.
+    pub fn new() -> Self {
+        Self {
+            complex: None,
+            critical_cells: Vec::new(),
+            boundaries: Vec::new(),
+            projection: HashMap::new(),
+            gradient: HashMap::new(),
+        }
+    }
+}
+
+impl<UM, G> Default for TopCubicalMatching<UM, G>
+where
+    UM: ModuleLike<Cell = Cube>,
+    G: Grader<Orthant>,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -139,7 +160,9 @@ where
                     for axis in 0..base_orthant.ambient_dimension() as usize {
                         if king_extent & (1 << axis) != 0 {
                             let boundary_extent = king_extent - (1 << axis);
-                            if base_orthant[axis] != self.complex.maximum()[axis] {
+                            if base_orthant[axis]
+                                != self.get_upper_complex().unwrap().maximum()[axis]
+                            {
                                 boundary_base_orthant[axis] += 1;
                                 self.update_gradient(
                                     ace_index,
@@ -269,7 +292,7 @@ where
     type UpperComplex = CubicalComplex<UM, TopCubeGrader<G>>;
     type UpperModule = UM;
 
-    fn compute_matching(complex: Self::UpperComplex) -> Self {
+    fn compute_matching(&mut self, complex: Self::UpperComplex) {
         // When subgrids are fully implemented, this will need to be replaced.
         // Minimum and maximum of each subgrid
         let nonempty_subgrids =
@@ -277,17 +300,15 @@ where
                 .map(|orth| (orth.clone(), orth))
                 .collect::<Vec<(Orthant, Orthant)>>();
 
-        let mut matching = Self {
-            complex,
-            critical_cells: Vec::new(),
-            boundaries: Vec::new(),
-            projection: HashMap::new(),
-            gradient: HashMap::new(),
-        };
+        self.complex = Some(complex);
+        self.critical_cells.clear();
+        self.boundaries.clear();
+        self.projection.clear();
+        self.gradient.clear();
 
         for (minimum_orthant, maximum_orthant) in nonempty_subgrids {
             let mut subgrid = Subgrid::new(
-                matching.get_upper_complex(),
+                self.get_upper_complex().unwrap(),
                 minimum_orthant,
                 maximum_orthant,
                 u32::MAX,
@@ -297,22 +318,21 @@ where
             let base_critical_orthant = subgrid.match_subgrid();
             for (_, critical_cells, _) in base_critical_orthant.iter() {
                 for cube in critical_cells {
-                    matching
-                        .projection
-                        .insert(cube.clone(), matching.critical_cells.len() as u32);
-                    matching.critical_cells.push(cube.clone());
-                    matching.boundaries.push(LM::new());
+                    self.projection
+                        .insert(cube.clone(), self.critical_cells.len() as u32);
+                    self.critical_cells.push(cube.clone());
+                    self.boundaries.push(LM::new());
                 }
             }
 
             for (base_orthant, critical_cells, _) in base_critical_orthant.iter() {
                 for cube in critical_cells {
-                    let boundary_chain = matching.get_upper_complex().cell_boundary(cube);
+                    let boundary_chain = self.get_upper_complex().unwrap().cell_boundary(cube);
                     for (boundary_cube, coef) in boundary_chain.into_iter() {
                         if *boundary_cube.base() == *base_orthant
-                            && let Some(ace_index) = matching.projection.get(&boundary_cube)
+                            && let Some(ace_index) = self.projection.get(&boundary_cube)
                         {
-                            matching.boundaries[matching.projection[cube] as usize]
+                            self.boundaries[self.projection[cube] as usize]
                                 .insert_or_add(*ace_index, coef);
                             continue;
                         }
@@ -326,8 +346,8 @@ where
                                 boundary_extent += 1 << axis;
                             }
                         }
-                        matching.update_gradient(
-                            matching.projection[cube],
+                        self.update_gradient(
+                            self.projection[cube],
                             boundary_cube.base().clone(),
                             boundary_extent,
                             coef,
@@ -337,25 +357,22 @@ where
             }
 
             for (base_orthant, _, orthant_matching) in base_critical_orthant {
-                if let Some(ace_map) = matching.gradient.remove(&base_orthant) {
+                if let Some(ace_map) = self.gradient.remove(&base_orthant) {
                     for (ace_index, mut chain) in ace_map {
-                        matching.gradient_flow(
-                            ace_index,
-                            &base_orthant,
-                            &orthant_matching,
-                            &mut chain,
-                        );
+                        self.gradient_flow(ace_index, &base_orthant, &orthant_matching, &mut chain);
                     }
                 }
             }
         }
-
-        matching
     }
 
     fn match_cell(&self, cube: &Cube) -> MatchResult<Cube, Self::Ring, Self::Priority> {
+        if self.complex.is_none() {
+            panic!("MorseMatching method called prior to compute_matching");
+        }
+
         let mut subgrid = Subgrid::new(
-            self.get_upper_complex(),
+            self.get_upper_complex().unwrap(),
             cube.base().clone(),
             cube.base().clone(),
             u32::MAX,
@@ -375,11 +392,11 @@ where
         Self::match_helper(cube.clone(), extent, orthant_matching, 0)
     }
 
-    fn get_upper_complex(&self) -> &Self::UpperComplex {
-        &self.complex
+    fn get_upper_complex(&self) -> Option<&Self::UpperComplex> {
+        self.complex.as_ref()
     }
 
-    fn extract_upper_complex(self) -> Self::UpperComplex {
+    fn take_upper_complex(self) -> Option<Self::UpperComplex> {
         self.complex
     }
 
@@ -411,8 +428,8 @@ where
 mod tests {
     use super::*;
     use crate::{
-        CellComplex, CoreductionMatching, Cube, CubicalComplex, Cyclic, Grader, HashMapGrader,
-        HashMapModule, ModuleLike, Orthant, TopCubeGrader,
+        CoreductionMatching, Cube, CubicalComplex, Cyclic, Grader, HashMapGrader, HashMapModule,
+        ModuleLike, Orthant, TopCubeGrader,
     };
 
     fn generate_top_cube_torus_orthants() -> Vec<Orthant> {
@@ -456,9 +473,8 @@ mod tests {
     #[test]
     fn full_reduce_cube_torus_complex() {
         let complex = top_cube_torus_hashmap();
-        let (_top_matching, _further_matchings, morse_complex) = TopCubicalMatching::full_reduce::<
-            CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
-        >(complex);
+        let mut matching = TopCubicalMatching::new();
+        let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
         let mut cells_by_dimension = [Vec::new(), Vec::new(), Vec::new()];
         for cell in morse_complex.cell_iter() {
@@ -475,7 +491,8 @@ mod tests {
     #[test]
     fn individual_matches_cube_torus_complex() {
         let complex = top_cube_torus_hashmap();
-        let matching = TopCubicalMatching::compute_matching(complex);
+        let mut matching = TopCubicalMatching::new();
+        matching.compute_matching(complex);
 
         let cube = Cube::vertex(Orthant::from([0, 0, 0]));
         let result = MatchResult::Queen {

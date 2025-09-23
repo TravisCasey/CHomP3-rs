@@ -1,7 +1,4 @@
-use chomp3rs::{
-    CellComplex, ComplexLike, CoreductionMatching, Cube, Cyclic, HashMapGrader, HashMapModule,
-    MorseMatching, Orthant, OrthantTrie, TopCubicalMatching,
-};
+use chomp3rs::{ComplexLike, CoreductionMatching, MorseMatching, TopCubicalMatching};
 use test_utilities::{top_cube_sn_hashmap, top_cube_sn_trie};
 
 fn main() {
@@ -13,13 +10,8 @@ fn top_cube_reduce_sn_hashmap(bencher: divan::Bencher, n: usize) {
     bencher
         .with_inputs(|| top_cube_sn_hashmap(n))
         .bench_local_values(|complex| {
-            let morse_complex = TopCubicalMatching::<
-                HashMapModule<Cube, Cyclic<2>>,
-                HashMapGrader<Orthant>,
-            >::full_reduce::<
-                CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
-            >(complex)
-            .2;
+            let mut matching = TopCubicalMatching::new();
+            let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
             // Don't optimize away..
             assert_eq!(morse_complex.dimension(), n as u32 + 1);
@@ -31,11 +23,8 @@ fn top_cube_reduce_sn_trie(bencher: divan::Bencher, n: usize) {
     bencher
         .with_inputs(|| top_cube_sn_trie(n))
         .bench_local_values(|complex| {
-            let morse_complex =
-                TopCubicalMatching::<HashMapModule<Cube, Cyclic<2>>, OrthantTrie>::full_reduce::<
-                    CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
-                >(complex)
-                .2;
+            let mut matching = TopCubicalMatching::new();
+            let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
             // Don't optimize away..
             assert_eq!(morse_complex.dimension(), n as u32 + 1);

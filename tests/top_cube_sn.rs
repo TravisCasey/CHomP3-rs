@@ -1,6 +1,6 @@
 use chomp3rs::{
-    CellComplex, ComplexLike, CoreductionMatching, Cube, Cyclic, Grader, HashMapGrader,
-    HashMapModule, ModuleLike, MorseMatching, Orthant, OrthantTrie, TopCubicalMatching,
+    CellComplex, ComplexLike, CoreductionMatching, Cyclic, Grader, HashMapModule, ModuleLike,
+    MorseMatching, TopCubicalMatching,
 };
 use test_utilities::{top_cube_sn_hashmap, top_cube_sn_trie};
 
@@ -32,14 +32,8 @@ fn verify_morse_complex(n: u32, morse_complex: &CellComplex<HashMapModule<u32, C
 fn top_cube_reduce_sn_hashmap() {
     for n in DIMENSIONS {
         let complex = top_cube_sn_hashmap(n as usize);
-
-        let morse_complex = TopCubicalMatching::<
-            HashMapModule<Cube, Cyclic<2>>,
-            HashMapGrader<Orthant>,
-        >::full_reduce::<
-            CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
-        >(complex)
-        .2;
+        let mut matching = TopCubicalMatching::new();
+        let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
         verify_morse_complex(n, &morse_complex);
     }
@@ -49,12 +43,8 @@ fn top_cube_reduce_sn_hashmap() {
 fn top_cube_reduce_sn_trie() {
     for n in DIMENSIONS {
         let complex = top_cube_sn_trie(n as usize);
-
-        let morse_complex =
-            TopCubicalMatching::<HashMapModule<Cube, Cyclic<2>>, OrthantTrie>::full_reduce::<
-                CoreductionMatching<CellComplex<HashMapModule<u32, Cyclic<2>>>>,
-            >(complex)
-            .2;
+        let mut matching = TopCubicalMatching::new();
+        let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
         verify_morse_complex(n, &morse_complex);
     }

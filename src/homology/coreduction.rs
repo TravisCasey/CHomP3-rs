@@ -29,12 +29,13 @@ use crate::{ComplexLike, HashMapModule, MatchResult, ModuleLike, MorseMatching, 
 /// The implementation is a reformulation of Algorithm 3.6 in Harker,
 /// Mischaikow, Mrozek, Nanda, *Discrete Morse Theoretic Algorithms for
 /// Computing Homology of Complexes and Maps.*
+#[derive(Debug, Clone)]
 pub struct CoreductionMatching<C, M = HashMapModule<u32, <C as ComplexLike>::Ring>>
 where
     C: ComplexLike,
     C::Cell: Hash,
 {
-    complex: C,
+    complex: Option<C>,
     critical_cells: Vec<C::Cell>,
     projection: HashMap<C::Cell, u32>,
     matches: HashMap<C::Cell, MatchResult<C::Cell, C::Ring, u32>>,
@@ -46,14 +47,30 @@ where
     C: ComplexLike,
     C::Cell: Hash,
 {
-    /// Functionally identical to the `compute_matching` function of the
-    /// [`MorseMatching`] trait implemented by this type, but the compiler will
-    /// correctly infer the default module type when using this constructor.
+    /// Initialize a matching with default options (cells of all grades are
+    /// kept).
     ///
-    /// If the user wants to use a different module type, they can use the
-    /// `compute_matching` constructor with type annotations.
-    pub fn new(complex: C) -> Self {
-        Self::compute_matching(complex)
+    /// No matching is performed until [`CoreductionMatching::compute_matching`]
+    /// has been called and thus most methods from the [`MorseMatching`] trait
+    /// implementation will panic if called before.
+    pub fn new() -> Self {
+        Self {
+            complex: None,
+            critical_cells: Vec::new(),
+            projection: HashMap::new(),
+            matches: HashMap::new(),
+            lower_module_type: PhantomData,
+        }
+    }
+}
+
+impl<C> Default for CoreductionMatching<C, HashMapModule<u32, <C as ComplexLike>::Ring>>
+where
+    C: ComplexLike,
+    C::Cell: Hash,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -70,38 +87,42 @@ where
     type UpperComplex = C;
     type UpperModule = <C as ComplexLike>::Module;
 
-    fn compute_matching(complex: Self::UpperComplex) -> Self {
-        let (critical_cells, matches) = CoreductionMatchingImpl::compute_matching(&complex);
-        let mut projection = HashMap::with_capacity(critical_cells.len());
-        for (lower_cell, upper_cell) in critical_cells.iter().enumerate() {
-            projection.insert(upper_cell.clone(), lower_cell as u32);
-        }
-        Self {
-            complex,
-            critical_cells,
-            projection,
-            matches,
-            lower_module_type: PhantomData,
+    fn compute_matching(&mut self, complex: Self::UpperComplex) {
+        (self.critical_cells, self.matches) = CoreductionMatchingImpl::compute_matching(&complex);
+        self.complex = Some(complex);
+        self.projection = HashMap::with_capacity(self.critical_cells.len());
+        for (lower_cell, upper_cell) in self.critical_cells.iter().enumerate() {
+            self.projection
+                .insert(upper_cell.clone(), lower_cell as u32);
         }
     }
 
-    fn get_upper_complex(&self) -> &Self::UpperComplex {
-        &self.complex
+    fn get_upper_complex(&self) -> Option<&Self::UpperComplex> {
+        self.complex.as_ref()
     }
 
-    fn extract_upper_complex(self) -> Self::UpperComplex {
+    fn take_upper_complex(self) -> Option<Self::UpperComplex> {
         self.complex
     }
 
     fn critical_cells(&self) -> Vec<Self::UpperCell> {
+        if self.complex.is_none() {
+            panic!("MorseMatching method called prior to compute_matching");
+        }
         self.critical_cells.clone()
     }
 
     fn project_cell(&self, cell: Self::UpperCell) -> Option<u32> {
+        if self.complex.is_none() {
+            panic!("MorseMatching method called prior to compute_matching");
+        }
         self.projection.get(&cell).copied()
     }
 
     fn include_cell(&self, cell: u32) -> Self::UpperCell {
+        if self.complex.is_none() {
+            panic!("MorseMatching method called prior to compute_matching");
+        }
         self.critical_cells[cell as usize].clone()
     }
 
@@ -109,6 +130,9 @@ where
         &self,
         cell: &Self::UpperCell,
     ) -> MatchResult<Self::UpperCell, Self::Ring, Self::Priority> {
+        if self.complex.is_none() {
+            panic!("MorseMatching method called prior to compute_matching");
+        }
         self.matches[cell].clone()
     }
 }
@@ -534,7 +558,8 @@ mod tests {
         coboundaries[1].insert_or_add(2, Cyclic::one());
 
         let complex = CellComplex::new(cell_dimensions, grades, boundaries, coboundaries);
-        let matching = CoreductionMatching::new(complex);
+        let mut matching = CoreductionMatching::new();
+        matching.compute_matching(complex);
 
         // Should have one critical cell (contractible to a point)
         assert_eq!(matching.critical_cells().len(), 1);
@@ -597,7 +622,8 @@ mod tests {
         coboundaries[5].insert_or_add(6, Cyclic::one());
 
         let complex = CellComplex::new(cell_dimensions, grades, boundaries, coboundaries);
-        let matching = CoreductionMatching::new(complex);
+        let mut matching = CoreductionMatching::new();
+        matching.compute_matching(complex);
 
         // Triangle is contractible, should reduce to single point
         assert_eq!(matching.critical_cells().len(), 1);
@@ -639,14 +665,15 @@ mod tests {
         let grader = HashMapGrader::uniform(cells.into_iter(), 0, 1);
         let complex: CubicalComplex<TestCubicalModule, _> = CubicalComplex::new(min, max, grader);
 
-        let matching = CoreductionMatching::new(complex);
+        let mut matching = CoreductionMatching::new();
+        matching.compute_matching(complex);
 
         // Line segment should contract to a point (complex of interest is grade 0)
         assert_eq!(
             matching
                 .critical_cells()
                 .iter()
-                .filter(|cell| matching.get_upper_complex().grade(cell) == 0)
+                .filter(|cell| matching.get_upper_complex().unwrap().grade(cell) == 0)
                 .count(),
             1
         );
@@ -702,7 +729,8 @@ mod tests {
         let grader = HashMapGrader::uniform(cells.into_iter(), 0, 1);
         let complex: CubicalComplex<TestCubicalModule, _> = CubicalComplex::new(min, max, grader);
 
-        let matching = CoreductionMatching::new(complex.clone());
+        let mut matching = CoreductionMatching::new();
+        matching.compute_matching(complex.clone());
 
         // Empty square has 1 dim 0 critical cell and 1 dim 1 critical cell
         // in grade 0.
@@ -711,7 +739,7 @@ mod tests {
                 .critical_cells
                 .iter()
                 .filter_map(|cell| {
-                    if matching.get_upper_complex().grade(cell) == 0 {
+                    if matching.get_upper_complex().unwrap().grade(cell) == 0 {
                         Some(cell.dimension())
                     } else {
                         None
