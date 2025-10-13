@@ -230,7 +230,7 @@ where
                 suborthant_matchings,
                 ..
             } => {
-                for suborthant_matching in suborthant_matchings {
+                for suborthant_matching in suborthant_matchings.iter().rev() {
                     self.gradient_flow(ace_index, base_orthant, suborthant_matching, chain);
                 }
             }
