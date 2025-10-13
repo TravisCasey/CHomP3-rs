@@ -350,9 +350,10 @@ impl<'a> TrieNode<'a> {
             let bitmap_len = slice[2] as usize;
             let num_children = slice[3] as usize;
 
-            let (prior_popcount, remainder) = slice.split_at(4).1.split_at(bitmap_len);
-            let (bitmap, remainder) = remainder.split_at(bitmap_len);
-            let halved_child_indices = remainder.split_at(2 * num_children).0;
+            let (prior_popcount, remainder) =
+                unsafe { slice.split_at_unchecked(4).1.split_at_unchecked(bitmap_len) };
+            let (bitmap, remainder) = unsafe { remainder.split_at_unchecked(bitmap_len) };
+            let halved_child_indices = unsafe { remainder.split_at_unchecked(2 * num_children).0 };
 
             // &[u16] reinterpreted as &[u32]
             // align_to fails here, use transmute instead
@@ -381,8 +382,13 @@ impl<'a> TrieNode<'a> {
             let comp_len = slice[1] as usize;
             let num_children = slice[2] as usize;
 
-            let (comp_slice, remainder) = slice.split_at(3).1.split_at(comp_len * num_children);
-            let halved_child_indices = remainder.split_at(2 * num_children).0;
+            let (comp_slice, remainder) = unsafe {
+                slice
+                    .split_at_unchecked(3)
+                    .1
+                    .split_at_unchecked(comp_len * num_children)
+            };
+            let halved_child_indices = unsafe { remainder.split_at_unchecked(2 * num_children).0 };
 
             // &[u16] reinterpreted as &[u32]
             // align_to fails here, use transmute instead
@@ -698,7 +704,7 @@ impl OrthantTrie {
                 let next_node_index = child_indices
                     [prior_popcount[bitmap_word_index] as usize + prior_in_word]
                     as usize;
-                self.search(next_node_index, coords.split_at(1).1)
+                self.search(next_node_index, unsafe { coords.split_at_unchecked(1).1 })
             }
             TrieNode::Compressed {
                 comp_len,
@@ -707,10 +713,9 @@ impl OrthantTrie {
             } => {
                 for (chunk_index, chunk) in chunks.enumerate() {
                     if coords[..comp_len] == *chunk {
-                        return self.search(
-                            child_indices[chunk_index] as usize,
-                            coords.split_at(comp_len).1,
-                        );
+                        return self.search(child_indices[chunk_index] as usize, unsafe {
+                            coords.split_at_unchecked(comp_len).1
+                        });
                     }
                 }
                 None
