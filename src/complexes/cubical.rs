@@ -418,11 +418,9 @@ impl Display for Cube {
             self.base_orthant, self.dual_orthant
         )?;
         let extent = self.extent();
-        for (i, &extends) in extent.iter().enumerate() {
-            if i > 0 {
-                write!(f, "")?;
-            }
-            write!(f, "{}", if extends { "1" } else { "0" })?;
+
+        for extends in extent.iter().rev() {
+            write!(f, "{}", if *extends { "1" } else { "0" })?;
         }
         write!(f, "]")
     }
@@ -985,7 +983,7 @@ mod tests {
         let edge = Cube::from_extent(Orthant::new(vec![1, 1]), &[true, false]);
         assert_eq!(
             edge.to_string(),
-            "Cube[base: (1, 1), dual: (1, 0), extent: 10]"
+            "Cube[base: (1, 1), dual: (1, 0), extent: 01]"
         );
 
         let square = Cube::top_cube(Orthant::new(vec![1, 1]));

@@ -6,7 +6,7 @@
 //! configurable modulus.
 
 use std::convert::From;
-use std::fmt::{Display, Error, Formatter};
+use std::fmt::{Debug, Display, Error, Formatter};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use flint_sys::nmod_vec::{nmod_add, nmod_init, nmod_inv, nmod_mul, nmod_neg, nmod_sub, nmod_t};
@@ -30,7 +30,7 @@ use crate::algebra::traits::RingLike;
 /// assert_eq!(Cyclic::<5>::from(8), Cyclic::<5>::from(3));
 /// assert_ne!(Cyclic::<7>::from(8), Cyclic::<7>::from(3));
 /// ```
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 pub struct Cyclic<const MOD: u64> {
     remainder: u64,
     modulus: nmod_t,
@@ -59,6 +59,12 @@ impl<const MOD: u64> Cyclic<MOD> {
             remainder: value % MOD,
             modulus,
         }
+    }
+}
+
+impl<const MOD: u64> Debug for Cyclic<MOD> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{} (mod {})", self.remainder, MOD)
     }
 }
 

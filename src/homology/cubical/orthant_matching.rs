@@ -2,9 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::fmt::Display;
+
 use crate::Orthant;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OrthantMatching {
     Branch {
         prime_extent: u32,
@@ -40,6 +42,49 @@ impl OrthantMatching {
             match_axis: ((upper ^ lower) & ((u32::MAX - upper) + lower + 1)).ilog2(),
         }
     }
+
+    fn display_with_indent(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        indent: usize,
+    ) -> std::fmt::Result {
+        write!(f, "{}", " ".repeat(indent))?;
+        match self {
+            Self::Branch {
+                prime_extent,
+                suborthant_matchings,
+            } => {
+                writeln!(
+                    f,
+                    "Branch {{ prime_extent: {prime_extent:b}, suborthant_matchings: ["
+                )?;
+                for matching in suborthant_matchings {
+                    matching.display_with_indent(f, indent + 4)?;
+                }
+                writeln!(f, "{}] }}", " ".repeat(indent))
+            }
+            Self::Leaf {
+                lower_extent,
+                match_axis,
+            } => writeln!(
+                f,
+                "Leaf {{ lower_extent: {lower_extent:b}, match_axis: {match_axis} }}"
+            ),
+            Self::Critical {
+                ace_dual_orthant,
+                ace_extent,
+            } => writeln!(
+                f,
+                "Critical {{ ace_dual_orthant: {ace_dual_orthant}, ace_extent: {ace_extent:b} }}"
+            ),
+        }
+    }
+}
+
+impl Display for OrthantMatching {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.display_with_indent(f, 0)
+    }
 }
 
 #[cfg(test)]
@@ -65,5 +110,32 @@ mod tests {
             orthant_matching,
             OrthantMatching::Leaf { match_axis: 3, .. }
         ));
+    }
+
+    #[test]
+    fn test_display() {
+        let orthant_matching = OrthantMatching::Branch {
+            prime_extent: 0b1101,
+            suborthant_matchings: vec![
+                OrthantMatching::Branch {
+                    prime_extent: 0b0001,
+                    suborthant_matchings: vec![OrthantMatching::Critical {
+                        ace_dual_orthant: Orthant::from([0, 1, -1, 2]),
+                        ace_extent: 0b0001,
+                    }],
+                },
+                OrthantMatching::construct_leaf(0b1111, 0b0010),
+            ],
+        };
+
+        assert_eq!(
+            orthant_matching.to_string(),
+            "Branch { prime_extent: 1101, suborthant_matchings: [\n    \
+                 Branch { prime_extent: 1, suborthant_matchings: [\n        \
+                     Critical { ace_dual_orthant: (0, 1, -1, 2), ace_extent: 1 }\n    \
+                 ] }\n    \
+                 Leaf { lower_extent: 10, match_axis: 0 }\n\
+             ] }\n"
+        );
     }
 }
