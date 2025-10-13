@@ -173,6 +173,35 @@ where
                         -UM::Ring::one()
                     } * chain.remove(&cell_extent);
 
+                    #[cfg(debug_assertions)]
+                    {
+                        let cell_cube = {
+                            let mut extent_vec =
+                                vec![false; base_orthant.ambient_dimension() as usize];
+                            for (index, ext) in extent_vec.iter_mut().enumerate() {
+                                if cell_extent & (1 << index) != 0 {
+                                    *ext = true;
+                                }
+                            }
+                            Cube::from_extent(base_orthant.clone(), &extent_vec)
+                        };
+                        let king_cube = {
+                            let mut extent_vec =
+                                vec![false; base_orthant.ambient_dimension() as usize];
+                            for (index, ext) in extent_vec.iter_mut().enumerate() {
+                                if king_extent & (1 << index) != 0 {
+                                    *ext = true;
+                                }
+                            }
+                            Cube::from_extent(base_orthant.clone(), &extent_vec)
+                        };
+                        assert_eq!(
+                            self.complex.as_ref().unwrap().grade(&cell_cube),
+                            self.complex.as_ref().unwrap().grade(&king_cube),
+                            "{cell_cube}, {king_cube}"
+                        );
+                    }
+
                     for axis in 0..base_orthant.ambient_dimension() as usize {
                         if king_extent & (1 << axis) != 0 {
                             let boundary_extent = king_extent - (1 << axis);

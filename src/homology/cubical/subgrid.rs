@@ -70,6 +70,10 @@ where
         *self.cache[orthant.cache_index]
             .get_or_insert_with(|| self.grading_function.grade(&orthant.orthant))
     }
+
+    fn orthant_grader(&self) -> &G {
+        self.grading_function
+    }
 }
 
 /// A breadth-first (i.e., all cells of same dimension before moving to the
@@ -270,6 +274,22 @@ where
 
         for prime_orthant in bfs_iter {
             let prime_grade = self.grade_cache.grade(&prime_orthant);
+
+            #[cfg(debug_assertions)]
+            {
+                let mut grade = 1u32;
+                for intermediate_orthant in OrthantIterator::new(
+                    prime_orthant.orthant.clone(),
+                    suborthant.base_orthant.clone(),
+                ) {
+                    grade = grade.min(
+                        self.grade_cache
+                            .orthant_grader()
+                            .grade(&intermediate_orthant),
+                    );
+                }
+                debug_assert_eq!(grade, prime_grade);
+            }
 
             // Found prime suborthant (largest suborthant for which its maximum
             // cell has differing grade than the max cell in this suborthant)
