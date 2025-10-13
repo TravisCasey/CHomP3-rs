@@ -99,6 +99,12 @@ mod tests {
             OrthantMatching::Leaf { match_axis: 0, .. }
         ));
 
+        let orthant_matching = OrthantMatching::construct_leaf(0b100100, 0b000000);
+        assert!(matches!(
+            orthant_matching,
+            OrthantMatching::Leaf { match_axis: 2, .. }
+        ));
+
         let orthant_matching = OrthantMatching::construct_leaf(0b11111, 0b01111);
         assert!(matches!(
             orthant_matching,
