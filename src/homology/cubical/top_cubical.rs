@@ -176,23 +176,15 @@ where
                     #[cfg(debug_assertions)]
                     {
                         let cell_cube = {
-                            let mut extent_vec =
-                                vec![false; base_orthant.ambient_dimension() as usize];
-                            for (index, ext) in extent_vec.iter_mut().enumerate() {
-                                if cell_extent & (1 << index) != 0 {
-                                    *ext = true;
-                                }
-                            }
+                            let extent_vec = (0..base_orthant.ambient_dimension())
+                                .map(|axis| cell_extent & (1 << axis) != 0)
+                                .collect::<Vec<_>>();
                             Cube::from_extent(base_orthant.clone(), &extent_vec)
                         };
                         let king_cube = {
-                            let mut extent_vec =
-                                vec![false; base_orthant.ambient_dimension() as usize];
-                            for (index, ext) in extent_vec.iter_mut().enumerate() {
-                                if king_extent & (1 << index) != 0 {
-                                    *ext = true;
-                                }
-                            }
+                            let extent_vec = (0..base_orthant.ambient_dimension())
+                                .map(|axis| king_extent & (1 << axis) != 0)
+                                .collect::<Vec<_>>();
                             Cube::from_extent(base_orthant.clone(), &extent_vec)
                         };
                         assert_eq!(
