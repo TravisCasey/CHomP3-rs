@@ -115,7 +115,7 @@ impl<UM, G, LM> TopCubicalMatching<UM, G, LM>
 where
     UM: ModuleLike<Cell = Cube>,
     LM: ModuleLike<Cell = u32, Ring = UM::Ring>,
-    G: Grader<Orthant>,
+    G: Grader<Orthant> + Clone,
 {
     /// Propagate the gradient `chain` of the critical cell (index `ace_index`
     /// in `critical_cells` and `boundaries`) within the orthant
@@ -255,7 +255,6 @@ where
         cube: Cube,
         extent: u32,
         orthant_matching: &OrthantMatching,
-        skip_axes: u32,
     ) -> MatchResult<Cube, UM::Ring, Orthant> {
         match orthant_matching {
             OrthantMatching::Critical { .. } => MatchResult::Ace { cell: cube },
@@ -286,6 +285,7 @@ where
                 }
             }
             OrthantMatching::Branch {
+                upper_extent,
                 prime_extent,
                 suborthant_matchings,
             } => {
@@ -293,7 +293,7 @@ where
                 let mut suborthant_index = 0usize;
                 let mut axis = 0;
                 while axis < cube.base().ambient_dimension() {
-                    if (skip_axes & (1 << axis)) == 0 {
+                    if (upper_extent & (1 << axis)) != 0 {
                         if differing_axes == 0 {
                             break;
                         }
@@ -304,13 +304,7 @@ where
                     axis += 1;
                     differing_axes >>= 1;
                 }
-                let next_skip_axes = !(prime_extent | ((1 << axis) - 1));
-                Self::match_helper(
-                    cube,
-                    extent,
-                    &suborthant_matchings[suborthant_index],
-                    next_skip_axes,
-                )
+                Self::match_helper(cube, extent, &suborthant_matchings[suborthant_index])
             }
         }
     }
@@ -320,7 +314,7 @@ impl<UM, G, LM> MorseMatching for TopCubicalMatching<UM, G, LM>
 where
     UM: ModuleLike<Cell = Cube>,
     LM: ModuleLike<Cell = u32, Ring = UM::Ring>,
-    G: Grader<Orthant>,
+    G: Grader<Orthant> + Clone,
 {
     type LowerModule = LM;
     type Priority = Orthant;
@@ -343,16 +337,14 @@ where
         self.projection.clear();
         self.gradient.clear();
 
-        for (minimum_orthant, maximum_orthant) in nonempty_subgrids {
-            let mut subgrid = Subgrid::new(
-                self.get_upper_complex().unwrap(),
-                minimum_orthant,
-                maximum_orthant,
-                self.maximum_kept_grade,
-                self.maximum_kept_dimension,
-            );
+        let mut subgrid = Subgrid::new(
+            self.complex.as_ref().unwrap(),
+            self.maximum_kept_grade,
+            self.maximum_kept_dimension,
+        );
 
-            let base_critical_orthant = subgrid.match_subgrid();
+        for (minimum_orthant, maximum_orthant) in nonempty_subgrids {
+            let base_critical_orthant = subgrid.match_subgrid(minimum_orthant, maximum_orthant);
             for (_, critical_cells, _) in base_critical_orthant.iter() {
                 for cube in critical_cells {
                     self.projection
@@ -408,14 +400,9 @@ where
             panic!("MorseMatching method called prior to compute_matching");
         }
 
-        let mut subgrid = Subgrid::new(
-            self.get_upper_complex().unwrap(),
-            cube.base().clone(),
-            cube.base().clone(),
-            u32::MAX,
-            u32::MAX,
-        );
-        let orthant_matching = &subgrid.match_subgrid()[0].2;
+        let mut subgrid = Subgrid::new(self.get_upper_complex().unwrap(), u32::MAX, u32::MAX);
+        let orthant_matching =
+            &subgrid.match_subgrid(cube.base().clone(), cube.base().clone())[0].2;
 
         let mut extent = 0u32;
         for (axis, (base_coord, dual_coord)) in
@@ -426,7 +413,7 @@ where
             }
         }
 
-        Self::match_helper(cube.clone(), extent, orthant_matching, 0)
+        Self::match_helper(cube.clone(), extent, orthant_matching)
     }
 
     fn get_upper_complex(&self) -> Option<&Self::UpperComplex> {

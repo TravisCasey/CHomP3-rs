@@ -9,6 +9,7 @@ use crate::Orthant;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OrthantMatching {
     Branch {
+        upper_extent: u32,
         prime_extent: u32,
         suborthant_matchings: Vec<OrthantMatching>,
     },
@@ -51,12 +52,13 @@ impl OrthantMatching {
         write!(f, "{}", " ".repeat(indent))?;
         match self {
             Self::Branch {
+                upper_extent,
                 prime_extent,
                 suborthant_matchings,
             } => {
                 writeln!(
                     f,
-                    "Branch {{ prime_extent: {prime_extent:b}, suborthant_matchings: ["
+                    "Branch {{ upper_extent: {upper_extent:b}, prime_extent: {prime_extent:b}, suborthant_matchings: ["
                 )?;
                 for matching in suborthant_matchings {
                     matching.display_with_indent(f, indent + 4)?;
@@ -121,9 +123,11 @@ mod tests {
     #[test]
     fn test_display() {
         let orthant_matching = OrthantMatching::Branch {
+            upper_extent: 0b1111,
             prime_extent: 0b1101,
             suborthant_matchings: vec![
                 OrthantMatching::Branch {
+                    upper_extent: 0b1101,
                     prime_extent: 0b0001,
                     suborthant_matchings: vec![OrthantMatching::Critical {
                         ace_dual_orthant: Orthant::from([0, 1, -1, 2]),
@@ -136,8 +140,8 @@ mod tests {
 
         assert_eq!(
             orthant_matching.to_string(),
-            "Branch { prime_extent: 1101, suborthant_matchings: [\n    \
-                 Branch { prime_extent: 1, suborthant_matchings: [\n        \
+            "Branch { upper_extent: 1111, prime_extent: 1101, suborthant_matchings: [\n    \
+                 Branch { upper_extent: 1101, prime_extent: 1, suborthant_matchings: [\n        \
                      Critical { ace_dual_orthant: (0, 1, -1, 2), ace_extent: 1 }\n    \
                  ] }\n    \
                  Leaf { lower_extent: 10, match_axis: 0 }\n\
