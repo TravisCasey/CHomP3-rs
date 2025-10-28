@@ -86,7 +86,7 @@ use crate::{ComplexLike, CubeIterator, Grader, ModuleLike, RingLike, TopCubeGrad
 /// each axis. Each [`Cube`] is defined by two `Orthant` instances.
 ///
 /// The maximum ambient dimension of an `Orthant` (as well as that of [`Cube`]
-/// and [`CubicalComnplex`] instances) is 32. The interface is otherwise
+/// and [`CubicalComplex`] instances) is 32. The interface is otherwise
 /// similar to an array with size fixed after construction.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Orthant {
