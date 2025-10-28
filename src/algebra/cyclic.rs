@@ -60,6 +60,13 @@ impl<const MOD: u64> Cyclic<MOD> {
             modulus,
         }
     }
+
+    /// Return the canonical representative value (remainder) of this element.
+    ///
+    /// The returned value is always in the range `[0, MOD)`.
+    pub fn value(&self) -> u64 {
+        self.remainder
+    }
 }
 
 impl<const MOD: u64> Debug for Cyclic<MOD> {
@@ -185,8 +192,11 @@ mod tests {
 
     #[test]
     fn construction() {
-        let _a = Cyclic::<2>::from(0);
-        let _b = Cyclic::<65521>::from(1);
+        let a = Cyclic::<2>::from(4);
+        assert_eq!(a.value(), 0);
+
+        let b = Cyclic::<65521>::from(1);
+        assert_eq!(b.value(), 1);
     }
 
     #[test]
