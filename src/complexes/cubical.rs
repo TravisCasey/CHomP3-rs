@@ -82,41 +82,57 @@ use std::slice::{Iter, IterMut};
 use crate::{ComplexLike, CubeIterator, Grader, ModuleLike, RingLike, TopCubeGrader};
 
 /// An orthant is an interval of cubical cells in the ambient space between a
-/// vertex and the cube it is a face of that is greater along each axis. Each
-/// [`Cube`] is defined by two orthant instances.
+/// vertex and the top-dimensional cube it is a face of that is greater along
+/// each axis. Each [`Cube`] is defined by two `Orthant` instances.
 ///
-/// The implementation of `Orthant` is similar to a vector of coordinates (of
-/// type `i16`) with a fixed length after construction.
+/// The maximum ambient dimension of an `Orthant` (as well as that of [`Cube`]
+/// and [`CubicalComnplex`] instances) is 32. The interface is otherwise
+/// similar to an array with size fixed after construction.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Orthant {
-    coordinates: Vec<i16>,
+    dimension: usize,
+    coordinates: [i16; 32],
 }
 
 impl Orthant {
     /// Create a new orthant with given coordinates.
+    ///
+    /// Panics if the length of `coordinates` exceeds 32, which is the maximum
+    /// ambient dimension of `Orthant` instances.
     #[must_use]
     pub fn new(coordinates: Vec<i16>) -> Self {
-        Self { coordinates }
+        assert!(
+            coordinates.len() <= 32,
+            "Cubical complex ambient dimension cannot exceed 32"
+        );
+        let mut array_coordinates = [0; 32];
+        array_coordinates.as_mut_slice()[..coordinates.len()]
+            .copy_from_slice(coordinates.as_slice());
+        Self {
+            dimension: coordinates.len(),
+            coordinates: array_coordinates,
+        }
     }
 
     /// Create an orthant with all coordinates set to zero.
     #[must_use]
     pub fn zeros(dimension: usize) -> Self {
         Self {
-            coordinates: vec![0; dimension],
+            dimension,
+            coordinates: [0; 32],
         }
     }
 
     /// Get the dimension of this orthant.
     #[must_use]
     pub fn ambient_dimension(&self) -> u32 {
-        self.coordinates.len() as u32
+        self.dimension as u32
     }
 
     /// Get a reference to the coordinates as a slice.
     #[must_use]
     pub fn as_slice(&self) -> &[i16] {
-        &self.coordinates
+        &self.coordinates[..self.dimension]
     }
 
     /// Get a mutable reference to the coordinates as a slice.
@@ -125,29 +141,29 @@ impl Orthant {
     /// Modifying the length of the returned slice may cause unexpected behavior
     /// and should be avoided. Only modify the values of existing elements.
     pub fn as_mut_slice(&mut self) -> &mut [i16] {
-        &mut self.coordinates
+        &mut self.coordinates[..self.dimension]
     }
 
     /// Create an iterator over the coordinates.
     pub fn iter(&self) -> Iter<'_, i16> {
-        self.coordinates.iter()
+        self.coordinates[..self.dimension].iter()
     }
 
     /// Create a mutable iterator over the coordinates.
     pub fn iter_mut(&mut self) -> IterMut<'_, i16> {
-        self.coordinates.iter_mut()
+        self.coordinates[..self.dimension].iter_mut()
     }
 
     /// Safely get a reference to the coordinate at the given index.
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&i16> {
-        self.coordinates.get(index)
+        self.coordinates[..self.dimension].get(index)
     }
 
     /// Safely get a mutable reference to the coordinate at the given index.
     #[must_use]
     pub fn get_mut(&mut self, index: usize) -> Option<&mut i16> {
-        self.coordinates.get_mut(index)
+        self.coordinates[..self.dimension].get_mut(index)
     }
 }
 
@@ -204,7 +220,7 @@ impl From<&mut [i16]> for Orthant {
 impl Display for Orthant {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "(")?;
-        for (i, coord) in self.coordinates.iter().enumerate() {
+        for (i, coord) in self.coordinates[..self.dimension].iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
@@ -222,7 +238,7 @@ impl PartialOrd for Orthant {
 
 impl Ord for Orthant {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.coordinates.cmp(&other.coordinates)
+        self.coordinates[..self.dimension].cmp(&other.coordinates[..other.dimension])
     }
 }
 
