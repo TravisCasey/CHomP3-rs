@@ -136,7 +136,7 @@ where
     {
         self.compute_matching(complex);
         let mut morse_complex = Some(self.construct_morse_complex());
-        let cell_count = morse_complex.as_ref().unwrap().cell_count();
+        let mut cell_count = morse_complex.as_ref().unwrap().cell_count();
         let mut further_matchings = Vec::new();
 
         loop {
@@ -149,6 +149,7 @@ where
                 );
             }
             morse_complex = Some(next_matching.construct_morse_complex());
+            cell_count = morse_complex.as_ref().unwrap().cell_count();
             further_matchings.push(next_matching);
         }
     }
