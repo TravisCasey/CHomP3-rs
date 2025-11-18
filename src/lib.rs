@@ -8,14 +8,19 @@
 
 #![warn(missing_docs)]
 
-pub use crate::algebra::{
+pub use algebra::{
     Additive, AlgebraicBase, Cyclic, HashMapModule, ModuleLike, Multiplicative, RingLike,
 };
-pub use crate::complexes::{
+pub use complexes::{
     CellComplex, ComplexLike, Cube, CubeIterator, CubicalComplex, Grader, HashMapGrader, Orthant,
     OrthantIterator, OrthantTrie, TopCubeGrader,
 };
-pub use crate::homology::{CoreductionMatching, MatchResult, MorseMatching, TopCubicalMatching};
+// temp subgrid, GridSubdivision, CubicalGradeintPropagator
+#[cfg(feature = "parallel")]
+pub use homology::CHomPMultiprocessingError;
+pub use homology::{
+    CoreductionMatching, MatchResult, MorseMatching, TopCubicalMatching, TopCubicalMatchingBuilder,
+};
 
 mod algebra;
 mod complexes;

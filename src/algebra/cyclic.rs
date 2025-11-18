@@ -10,6 +10,8 @@ use std::fmt::{Debug, Display, Error, Formatter};
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use flint_sys::nmod_vec::{nmod_add, nmod_init, nmod_inv, nmod_mul, nmod_neg, nmod_sub, nmod_t};
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize, de::Visitor};
 
 use crate::algebra::traits::RingLike;
 
@@ -186,8 +188,48 @@ impl<const MOD: u64> PartialEq for Cyclic<MOD> {
 
 impl<const MOD: u64> Eq for Cyclic<MOD> {}
 
+#[cfg(feature = "serde")]
+impl<const MOD: u64> Serialize for Cyclic<MOD> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u64(self.remainder)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, const MOD: u64> Deserialize<'de> for Cyclic<MOD> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct U64Visitor;
+
+        impl<'de> Visitor<'de> for U64Visitor {
+            type Value = u64;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("any 64 bit integer")
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(v)
+            }
+        }
+
+        deserializer.deserialize_u64(U64Visitor).map(Cyclic::new)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "serde")]
+    use serde_test::{Token, assert_tokens};
+
     use super::*;
 
     #[test]
@@ -308,5 +350,12 @@ mod tests {
     #[test]
     fn display() {
         assert_eq!(Cyclic::<7>::from(16).to_string(), "2 (mod 7)");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serialize_deserialize() {
+        let a = Cyclic::<11>::from(6);
+        assert_tokens(&a, &[Token::U64(6)]);
     }
 }

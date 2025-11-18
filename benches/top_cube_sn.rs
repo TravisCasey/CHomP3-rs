@@ -36,7 +36,7 @@ fn top_cube_reduce_sn_hashmap_grade_truncated(bencher: divan::Bencher, n: usize)
     bencher
         .with_inputs(|| top_cube_sn_hashmap(n))
         .bench_local_values(|complex| {
-            let mut matching = TopCubicalMatching::new(Some(0), None);
+            let mut matching = TopCubicalMatching::new(Some(0), None, None);
             let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
             // Don't optimize away.. (note truncation)
@@ -49,7 +49,7 @@ fn top_cube_reduce_sn_trie_grade_truncated(bencher: divan::Bencher, n: usize) {
     bencher
         .with_inputs(|| top_cube_sn_trie(n))
         .bench_local_values(|complex| {
-            let mut matching = TopCubicalMatching::new(Some(0), None);
+            let mut matching = TopCubicalMatching::new(Some(0), None, None);
             let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
             // Don't optimize away.. (note truncation)

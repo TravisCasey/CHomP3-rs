@@ -69,7 +69,7 @@ fn verify_morse_complex_grade_truncated(
 #[test]
 fn top_cube_reduce_torus_hashmap_grade_truncated() {
     let complex = top_cube_torus_hashmap();
-    let mut matching = TopCubicalMatching::new(Some(0), None);
+    let mut matching = TopCubicalMatching::new(Some(0), None, None);
     let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
     verify_morse_complex_grade_truncated(&morse_complex);
@@ -78,7 +78,7 @@ fn top_cube_reduce_torus_hashmap_grade_truncated() {
 #[test]
 fn top_cube_reduce_torus_trie_grade_truncated() {
     let complex = top_cube_torus_trie();
-    let mut matching = TopCubicalMatching::new(Some(0), None);
+    let mut matching = TopCubicalMatching::new(Some(0), None, None);
     let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
     verify_morse_complex_grade_truncated(&morse_complex);

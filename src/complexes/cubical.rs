@@ -79,6 +79,9 @@ use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 use std::slice::{Iter, IterMut};
 
+#[cfg(feature = "parallel")]
+use mpi::traits::Equivalence;
+
 use crate::{ComplexLike, CubeIterator, Grader, ModuleLike, RingLike, TopCubeGrader};
 
 /// An orthant is an interval of cubical cells in the ambient space between a
@@ -89,6 +92,7 @@ use crate::{ComplexLike, CubeIterator, Grader, ModuleLike, RingLike, TopCubeGrad
 /// and [`CubicalComplex`] instances) is 32. The interface is otherwise
 /// similar to an array with size fixed after construction.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "parallel", derive(Equivalence))]
 pub struct Orthant {
     dimension: usize,
     coordinates: [i16; 32],
@@ -277,6 +281,7 @@ impl Ord for Orthant {
 /// assert_eq!(square.extent(), vec![true, true]); // extent 11
 /// ```
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "parallel", derive(Equivalence))]
 pub struct Cube {
     base_orthant: Orthant,
     dual_orthant: Orthant,

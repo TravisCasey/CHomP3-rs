@@ -77,7 +77,7 @@ fn verify_morse_complex_grade_truncated(
 fn top_cube_reduce_sn_hashmap_grade_truncated() {
     for n in DIMENSIONS {
         let complex = top_cube_sn_hashmap(n as usize);
-        let mut matching = TopCubicalMatching::new(Some(0), None);
+        let mut matching = TopCubicalMatching::new(Some(0), None, None);
         let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
         verify_morse_complex_grade_truncated(n, &morse_complex);
@@ -88,7 +88,7 @@ fn top_cube_reduce_sn_hashmap_grade_truncated() {
 fn top_cube_reduce_sn_trie_grade_truncated() {
     for n in DIMENSIONS {
         let complex = top_cube_sn_trie(n as usize);
-        let mut matching = TopCubicalMatching::new(Some(0), None);
+        let mut matching = TopCubicalMatching::new(Some(0), None, None);
         let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
         verify_morse_complex_grade_truncated(n, &morse_complex);

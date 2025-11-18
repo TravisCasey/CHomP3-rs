@@ -3,7 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 pub use coreduction::CoreductionMatching;
-pub use cubical::TopCubicalMatching;
+#[cfg(feature = "parallel")]
+pub use cubical::CHomPMultiprocessingError;
+pub use cubical::{TopCubicalMatching, TopCubicalMatchingBuilder};
 pub use morse::MatchResult;
 pub use traits::MorseMatching;
 

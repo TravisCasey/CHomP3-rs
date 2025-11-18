@@ -2,10 +2,283 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::collections::HashSet;
 use std::iter::zip;
 
-use crate::homology::cubical::OrthantMatching;
+use itertools::Itertools;
+
+use crate::homology::cubical::orthant_matching::OrthantMatching;
 use crate::{Cube, CubicalComplex, Grader, Orthant, OrthantIterator, TopCubeGrader};
+
+/// A utility type for subdividing a rectangular grid of `Orthant` objects into
+/// smaller aligned subgrids.
+///
+/// Given a rectangular grid defined by minimum and maximum orthants
+/// (inclusive), this type partitions it into smaller rectangular subgrids of a
+/// specified size. Subgrids are aligned to the minimum orthant, and those at
+/// the boundary may be truncated to fit within the original grid.
+///
+/// # Nonempty Subgrids
+///
+/// This type supports tracking a list of "active" orthants provided at
+/// construction time. A subgrid is considered "nonempty" if at least one of
+/// these orthants either:
+/// 1. Is contained within the subgrid bounds, or
+/// 2. Is at most one coordinate less than some orthant in the subgrid along
+///    each axis.
+///
+/// The second condition means that for a subgrid with bounds `[min, max]` and
+/// an active orthant `L`, the subgrid is nonempty if for all coordinates `i`:
+/// `min[i] - 1 <= L[i] <= max[i]`.
+///
+/// Nonempty subgrids are computed at construction time and stored for efficient
+/// iteration.
+#[derive(Clone, Debug)]
+pub struct GridSubdivision {
+    minimum_orthant: Orthant,
+    maximum_orthant: Orthant,
+    subgrid_shape: Vec<i16>,
+    nonempty_subgrids: Vec<(Orthant, Orthant)>,
+}
+
+impl GridSubdivision {
+    /// Creates a new grid subdivision of the rectangular grid between the given
+    /// minimum and maximum orthants (inclusive).
+    ///
+    /// Panics if the dimensions don't match or if any subgrid size is
+    /// non-positive.
+    #[must_use]
+    pub fn new(
+        minimum_orthant: Orthant,
+        maximum_orthant: Orthant,
+        subgrid_shape: Option<Vec<i16>>,
+        orthants: Option<Vec<Orthant>>,
+    ) -> Self {
+        let dim = minimum_orthant.ambient_dimension() as usize;
+        // Default subgrid shape is to process one orthant at a time.
+        let subgrid_shape =
+            subgrid_shape.unwrap_or(vec![1; minimum_orthant.ambient_dimension() as usize]);
+
+        // Input validation. This is only run once, or at most once per process
+        // when run in parallel, so this does not incur significant computational
+        // cost.
+        assert_eq!(
+            minimum_orthant.ambient_dimension(),
+            maximum_orthant.ambient_dimension(),
+            "minimum and maximum orthants must have the same dimension"
+        );
+        assert_eq!(
+            minimum_orthant.ambient_dimension() as usize,
+            subgrid_shape.len(),
+            "subgrid shape must have exactly as many entries as the ambient dimension"
+        );
+        assert!(
+            subgrid_shape.iter().all(|&s| s > 0),
+            "subgrid shape must only contain positive entries"
+        );
+        for (i, (&min_coord, &max_coord)) in minimum_orthant
+            .iter()
+            .zip(maximum_orthant.iter())
+            .enumerate()
+        {
+            assert!(
+                min_coord <= max_coord,
+                "minimum orthant coordinate {} exceeds maximum at axis {}",
+                min_coord,
+                i
+            );
+        }
+
+        if orthants.is_none() {
+            let mut subdivision = Self {
+                minimum_orthant,
+                maximum_orthant,
+                subgrid_shape,
+                nonempty_subgrids: Vec::new(),
+            };
+            let nonempty_subgrids = SubgridIterator::new(&subdivision).collect();
+            subdivision.nonempty_subgrids = nonempty_subgrids;
+            return subdivision;
+        }
+
+        // Compute nonempty subgrids at construction by iterating over orthants
+        let mut min_subgrid_index = Vec::with_capacity(dim);
+        let mut next_subgrid = vec![false; dim];
+        let mut nonempty_subgrid_set: HashSet<Vec<i16>> = HashSet::new();
+        for orthant in orthants.unwrap().into_iter() {
+            min_subgrid_index.clear();
+            next_subgrid.fill(false);
+            // Compute the range of subgrid indices along each axis
+            for axis in 0..dim {
+                if orthant[axis] < minimum_orthant[axis] || orthant[axis] > maximum_orthant[axis] {
+                    break;
+                }
+                let relative_coord = orthant[axis] - minimum_orthant[axis];
+                min_subgrid_index.push(relative_coord / subgrid_shape[axis]);
+                if (relative_coord + 1) % subgrid_shape[axis] == 0 {
+                    next_subgrid[axis] = true;
+                }
+            }
+            if min_subgrid_index.len() < dim {
+                continue;
+            }
+
+            nonempty_subgrid_set.extend(
+                min_subgrid_index
+                    .iter()
+                    .zip(next_subgrid.iter())
+                    .map(|(index, next)| *index..=(*index + *next as i16))
+                    .multi_cartesian_product(),
+            );
+        }
+
+        // Convert the set to a vector of actual subgrid bounds
+        let nonempty_subgrids: Vec<(Orthant, Orthant)> = nonempty_subgrid_set
+            .into_iter()
+            .map(|indices| {
+                let subgrid_min: Orthant = (0..dim)
+                    .map(|axis| minimum_orthant[axis] + indices[axis] * subgrid_shape[axis])
+                    .collect();
+                let subgrid_max: Orthant = (0..dim)
+                    .map(|axis| {
+                        (subgrid_min[axis] + subgrid_shape[axis] - 1).min(maximum_orthant[axis])
+                    })
+                    .collect();
+                (subgrid_min, subgrid_max)
+            })
+            .collect();
+
+        Self {
+            minimum_orthant,
+            maximum_orthant,
+            subgrid_shape,
+            nonempty_subgrids,
+        }
+    }
+
+    /// Returns an iterator over nonempty subgrids as (minimum, maximum) orthant
+    /// pairs.
+    ///
+    /// A subgrid is nonempty if at least one orthant from the list provided at
+    /// construction satisfies either:
+    /// 1. The orthant is inside the subgrid, or
+    /// 2. The orthant is at most one coordinate less than some orthant in the
+    ///    subgrid along each axis.
+    ///
+    /// More precisely, for a subgrid with bounds [min, max] and a list orthant
+    /// L, the subgrid is nonempty if for all coordinates i: min[i] - 1 <=
+    /// L[i] <= max[i].
+    ///
+    /// The nonempty subgrids are precomputed at construction time. Note that
+    /// the iteration order is not deterministic as it depends on the internal
+    /// HashSet used during construction.
+    pub fn nonempty_subgrids(&self) -> impl Iterator<Item = &(Orthant, Orthant)> {
+        self.nonempty_subgrids.iter()
+    }
+
+    /// Queries which subgrid contains the given orthant and returns the
+    /// (minimum, maximum) orthant pair defining the subgrid.
+    ///
+    /// Panics if the ambient dimension of the orthant does not match that of
+    /// the orthants defining the grid.
+    #[allow(dead_code)]
+    pub fn query_subgrid(&self, orthant: &Orthant) -> (Orthant, Orthant) {
+        assert_eq!(
+            orthant.ambient_dimension(),
+            self.minimum_orthant.ambient_dimension(),
+            "orthant dimension mismatch"
+        );
+
+        let dim = self.minimum_orthant.ambient_dimension() as usize;
+        let subgrid_min_orthant: Orthant = (0..dim)
+            .map(|axis| {
+                let subgrid_index =
+                    (orthant[axis] - self.minimum_orthant[axis]) / self.subgrid_shape[axis];
+                self.minimum_orthant[axis] + subgrid_index * self.subgrid_shape[axis]
+            })
+            .collect();
+        let subgrid_max_orthant: Orthant = (0..dim)
+            .map(|axis| {
+                (subgrid_min_orthant[axis] + self.subgrid_shape[axis] - 1)
+                    .min(self.maximum_orthant[axis])
+            })
+            .collect();
+
+        (subgrid_min_orthant, subgrid_max_orthant)
+    }
+}
+
+/// Iterator over subgrids in a `GridSubdivision`.
+struct SubgridIterator {
+    minimum_orthant: Orthant,
+    maximum_orthant: Orthant,
+    subgrid_shape: Vec<i16>,
+    current_indices: Vec<i16>,
+    num_subgrids_per_axis: Vec<i16>,
+    finished: bool,
+}
+
+impl SubgridIterator {
+    fn new(subdivision: &GridSubdivision) -> Self {
+        let dim = subdivision.minimum_orthant.ambient_dimension() as usize;
+        let num_subgrids_per_axis: Vec<i16> = (0..dim)
+            .map(|axis| {
+                let range =
+                    subdivision.maximum_orthant[axis] - subdivision.minimum_orthant[axis] + 1;
+                (range + subdivision.subgrid_shape[axis] - 1) / subdivision.subgrid_shape[axis]
+            })
+            .collect();
+
+        Self {
+            minimum_orthant: subdivision.minimum_orthant.clone(),
+            maximum_orthant: subdivision.maximum_orthant.clone(),
+            subgrid_shape: subdivision.subgrid_shape.clone(),
+            current_indices: vec![0; dim],
+            num_subgrids_per_axis,
+            finished: false,
+        }
+    }
+}
+
+impl Iterator for SubgridIterator {
+    type Item = (Orthant, Orthant);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+        let dim = self.current_indices.len();
+
+        let subgrid_min_orthant: Orthant = (0..dim)
+            .map(|axis| {
+                self.minimum_orthant[axis] + self.current_indices[axis] * self.subgrid_shape[axis]
+            })
+            .collect();
+        let subgrid_max_orthant: Orthant = (0..dim)
+            .map(|axis| {
+                (subgrid_min_orthant[axis] + self.subgrid_shape[axis] - 1)
+                    .min(self.maximum_orthant[axis])
+            })
+            .collect();
+
+        // Advance to next subgrid
+        let mut axis = 0;
+        while axis < dim {
+            self.current_indices[axis] += 1;
+            if self.current_indices[axis] < self.num_subgrids_per_axis[axis] {
+                break;
+            }
+            self.current_indices[axis] = 0;
+            axis += 1;
+        }
+
+        if axis == dim {
+            self.finished = true;
+        }
+
+        Some((subgrid_min_orthant, subgrid_max_orthant))
+    }
+}
 
 /// Helper type to find the "peaks" of an Orthant - those cells which are of
 /// lesser grade than all of their cofaces. This implies that their dual orthant
@@ -277,6 +550,18 @@ where
         }
     }
 
+    /// Set the maximum grade of returned critical cells for any future
+    /// `match_subgrid` calls.
+    pub fn set_maximum_kept_grade(&mut self, maximum_kept_grade: u32) {
+        self.maximum_kept_grade = maximum_kept_grade;
+    }
+
+    /// Set the maximum dimension of returned critical cells for any future
+    /// `match_subgrid` calls.
+    pub fn set_maximum_kept_dimension(&mut self, maximum_kept_dimension: u32) {
+        self.maximum_kept_dimension = maximum_kept_dimension;
+    }
+
     fn prepare_subgrid(&mut self, minimum_orthant: Orthant, maximum_orthant: Orthant) {
         debug_assert_eq!(
             minimum_orthant.ambient_dimension(),
@@ -479,6 +764,102 @@ mod tests {
 
     use super::*;
     use crate::{Cyclic, HashMapGrader, HashMapModule};
+
+    #[test]
+    fn grid_subdivision_basic() {
+        let subdivision = GridSubdivision::new(
+            Orthant::from([0, 0]),
+            Orthant::from([9, 9]),
+            Some(vec![5, 5]),
+            None,
+        );
+
+        let subgrids: Vec<_> = subdivision.nonempty_subgrids().collect();
+        assert_eq!(subgrids.len(), 4);
+
+        // Check first subgrid
+        assert_eq!(subgrids[0].0, Orthant::from([0, 0]));
+        assert_eq!(subgrids[0].1, Orthant::from([4, 4]));
+
+        // Check last subgrid
+        assert_eq!(subgrids[3].0, Orthant::from([5, 5]));
+        assert_eq!(subgrids[3].1, Orthant::from([9, 9]));
+    }
+
+    #[test]
+    fn grid_subdivision_query() {
+        let subdivision = GridSubdivision::new(
+            Orthant::from([0, 0]),
+            Orthant::from([9, 9]),
+            Some(vec![5, 5]),
+            Some(vec![]),
+        );
+
+        let (min, max) = subdivision.query_subgrid(&Orthant::from([3, 7]));
+        assert_eq!(min, Orthant::from([0, 5]));
+        assert_eq!(max, Orthant::from([4, 9]));
+    }
+
+    #[test]
+    fn nonempty_subgrids_orthant_inside() {
+        // Test case 1: Orthant is directly inside a subgrid
+        let subdivision = GridSubdivision::new(
+            Orthant::from([0, 0, 0]),
+            Orthant::from([9, 9, 9]),
+            Some(vec![5, 5, 5]),
+            Some(vec![Orthant::from([2, 3, 4])]),
+        );
+
+        let nonempty: Vec<_> = subdivision.nonempty_subgrids().cloned().collect();
+        // The orthant [2, 3, 4] is inside [0, 0, 0] to [4, 4, 4]
+        // It's also within range of [0, 0, 5], [4, 4, 9]
+        assert_eq!(nonempty.len(), 2);
+        assert!(nonempty.contains(&(Orthant::from([0, 0, 0]), Orthant::from([4, 4, 4]))));
+        assert!(nonempty.contains(&(Orthant::from([0, 0, 5]), Orthant::from([4, 4, 9]))));
+    }
+
+    #[test]
+    fn nonempty_subgrids_multiple_orthants() {
+        // Multiple orthants affecting different subgrids
+        let subdivision = GridSubdivision::new(
+            Orthant::from([0, 0]),
+            Orthant::from([9, 9]),
+            Some(vec![5, 5]),
+            Some(vec![
+                Orthant::from([2, 2]), // Inside [0,0] to [4,4]
+                Orthant::from([7, 7]), // Inside [5,5] to [9,9]
+            ]),
+        );
+
+        let nonempty: Vec<_> = subdivision.nonempty_subgrids().cloned().collect();
+        assert_eq!(nonempty.len(), 2);
+        assert!(nonempty.contains(&(Orthant::from([0, 0]), Orthant::from([4, 4]))));
+        assert!(nonempty.contains(&(Orthant::from([5, 5]), Orthant::from([9, 9]))));
+    }
+
+    #[test]
+    fn nonempty_subgrids_large_orthant_list() {
+        // Create a 20x20 grid with 5x5 subgrids (16 total subgrids)
+        let mut orthants = Vec::new();
+
+        // Add 100 orthants scattered throughout the grid
+        for i in 0..10 {
+            for j in 0..10 {
+                orthants.push(Orthant::from([i as i16 * 2, j as i16 * 2]));
+            }
+        }
+
+        let subdivision = GridSubdivision::new(
+            Orthant::from([0, 0]),
+            Orthant::from([19, 19]),
+            Some(vec![5, 5]),
+            Some(orthants),
+        );
+
+        let nonempty: Vec<_> = subdivision.nonempty_subgrids().cloned().collect();
+        // All 16 subgrids should be nonempty given the orthant distribution
+        assert_eq!(nonempty.len(), 16);
+    }
 
     #[test]
     fn match_cube_torus_complex_subgrid() {
