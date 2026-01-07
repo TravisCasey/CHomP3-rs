@@ -9,7 +9,7 @@ const DIMENSIONS: [u32; 4] = [1, 2, 3, 4];
 fn verify_morse_complex(n: u32, morse_complex: &CellComplex<HashMapModule<u32, Cyclic<2>>>) {
     let correct_dimensions = vec![0, n];
     let mut dimensions = Vec::new();
-    for cell in morse_complex.cell_iter() {
+    for cell in morse_complex.iter() {
         if morse_complex.grade(&cell) != 0 {
             continue;
         }
@@ -24,7 +24,7 @@ fn verify_morse_complex(n: u32, morse_complex: &CellComplex<HashMapModule<u32, C
             HashMapModule::new()
         );
     }
-    dimensions.sort();
+    dimensions.sort_unstable();
     assert_eq!(dimensions, correct_dimensions);
 }
 
@@ -56,7 +56,7 @@ fn verify_morse_complex_grade_truncated(
 ) {
     let correct_dimensions = vec![0, n];
     let mut dimensions = Vec::new();
-    for cell in morse_complex.cell_iter() {
+    for cell in morse_complex.iter() {
         assert_eq!(morse_complex.grade(&cell), 0);
         dimensions.push(morse_complex.cell_dimension(&cell));
 
@@ -69,7 +69,7 @@ fn verify_morse_complex_grade_truncated(
             HashMapModule::new()
         );
     }
-    dimensions.sort();
+    dimensions.sort_unstable();
     assert_eq!(dimensions, correct_dimensions);
 }
 
@@ -77,7 +77,7 @@ fn verify_morse_complex_grade_truncated(
 fn top_cube_reduce_sn_hashmap_grade_truncated() {
     for n in DIMENSIONS {
         let complex = top_cube_sn_hashmap(n as usize);
-        let mut matching = TopCubicalMatching::new(Some(0), None, None);
+        let mut matching = TopCubicalMatching::with_max_grade(0);
         let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
         verify_morse_complex_grade_truncated(n, &morse_complex);
@@ -88,7 +88,7 @@ fn top_cube_reduce_sn_hashmap_grade_truncated() {
 fn top_cube_reduce_sn_trie_grade_truncated() {
     for n in DIMENSIONS {
         let complex = top_cube_sn_trie(n as usize);
-        let mut matching = TopCubicalMatching::new(Some(0), None, None);
+        let mut matching = TopCubicalMatching::with_max_grade(0);
         let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
 
         verify_morse_complex_grade_truncated(n, &morse_complex);

@@ -28,6 +28,7 @@ fn generate_top_cube_torus_orthants() -> Vec<Orthant> {
     top_cubes
 }
 
+#[must_use]
 pub fn top_cube_torus_hashmap()
 -> CubicalComplex<HashMapModule<Cube, Cyclic<2>>, TopCubeGrader<HashMapGrader<Orthant>>> {
     let minimum = Orthant::from([0, 0, 0]);
@@ -40,6 +41,7 @@ pub fn top_cube_torus_hashmap()
     CubicalComplex::new(minimum, maximum, grader)
 }
 
+#[must_use]
 pub fn top_cube_torus_trie()
 -> CubicalComplex<HashMapModule<Cube, Cyclic<2>>, TopCubeGrader<OrthantTrie>> {
     let minimum = Orthant::from([0, 0, 0]);

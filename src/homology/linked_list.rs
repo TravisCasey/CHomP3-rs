@@ -2,17 +2,49 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-/// A node in a vector-based doubly linked list.
+//! A vector-backed doubly linked list optimized for O(1) random removal.
+//!
+//! This module provides a specialized linked list implementation used
+//! internally by [`CoreductionMatching`](super::CoreductionMatching) for
+//! efficient manipulation of the Hasse diagram during the coreduction
+//! algorithm.
+//!
+//! # Design Rationale
+//!
+//! The coreduction algorithm requires:
+//! - O(1) append operations (`push_back`)
+//! - O(1) removal by index (`pop`) - the key requirement
+//! - O(1) front removal (`pop_front`)
+//! - Cache-friendly memory layout
+//!
+//! Standard library [`std::collections::LinkedList`] does not support O(1)
+//! removal by index (requires traversal). External crates like `slotmap` or
+//! `slab` add dependency overhead for this specialized use case.
+//!
+//! This implementation stores nodes contiguously in a `Vec`, maintaining
+//! doubly-linked pointers via indices. When `push_back` returns an index, that
+//! index can later be used with `pop` for O(1) removal.
+
+/// A node in the vector-backed doubly linked list.
+///
+/// Each node stores data and optional indices to its neighbors in the list.
+/// When a node is removed, its parent/child pointers are cleared but the node
+/// remains in the backing vector.
 #[derive(Debug, Default, Clone)]
 struct LLNode {
+    /// The stored value.
     data: usize,
+    /// Index of the previous node in the list, or `None` if this is the front.
     parent: Option<usize>,
+    /// Index of the next node in the list, or `None` if this is the back.
     child: Option<usize>,
 }
 
-/// A doubly linked list implemented using a vector to store nodes.
-/// This provides O(1) random access to nodes via the [`LinkedList::pop`] method
-/// while maintaining linked list semantics for insertions and deletions.
+/// A doubly linked list backed by a contiguous vector.
+///
+/// This data structure provides O(1) random access removal via the index
+/// returned by [`push_back`](LinkedList::push_back), while maintaining linked
+/// list semantics for sequential access.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct LinkedList {
     nodes: Vec<LLNode>,
@@ -22,7 +54,8 @@ pub(crate) struct LinkedList {
 }
 
 impl LinkedList {
-    /// Create a new empty LinkedList.
+    /// Create a new empty linked list.
+    #[must_use]
     pub fn new() -> Self {
         LinkedList {
             nodes: Vec::new(),
@@ -32,7 +65,11 @@ impl LinkedList {
         }
     }
 
-    /// Create a new empty LinkedList with the specified capacity.
+    /// Create a new empty linked list with pre-allocated capacity.
+    ///
+    /// This is useful when the approximate number of elements is known in
+    /// advance, avoiding reallocations during `push_back` operations.
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         LinkedList {
             nodes: Vec::with_capacity(capacity),
@@ -42,7 +79,10 @@ impl LinkedList {
         }
     }
 
-    /// Add an element to the back of the list and return its index.
+    /// Add an element to the back of the list.
+    ///
+    /// Returns the index of the newly inserted element. This index can be used
+    /// later with [`pop`](LinkedList::pop) to remove the element in O(1) time.
     pub fn push_back(&mut self, data: usize) -> usize {
         let new_index = self.nodes.len();
         self.nodes.push(LLNode {
@@ -66,8 +106,14 @@ impl LinkedList {
     }
 
     /// Remove and return the element at the specified index.
-    /// Return `None` if the index is invalid or the node does not exist in the
-    /// list.
+    ///
+    /// This is the key operation that provides O(1) random removal. The index
+    /// should be one previously returned by
+    /// [`push_back`](LinkedList::push_back).
+    ///
+    /// Returns `None` if the index is out of bounds. Note that removing an
+    /// already-removed index may return stale data; callers are responsible
+    /// for tracking which indices are valid.
     pub fn pop(&mut self, index: usize) -> Option<usize> {
         if index >= self.nodes.len() {
             return None;
@@ -100,7 +146,8 @@ impl LinkedList {
     }
 
     /// Remove and return the front element of the list.
-    /// Return `None` if the list is empty.
+    ///
+    /// Returns `None` if the list is empty.
     pub fn pop_front(&mut self) -> Option<usize> {
         self.front.map(|front_index| {
             let node = self.nodes[front_index].clone();
@@ -112,7 +159,7 @@ impl LinkedList {
             if let Some(child_index) = node.child {
                 self.nodes[child_index].parent = None;
             } else {
-                // This was the back node
+                // This was the only node
                 self.back = None;
             }
 
@@ -125,23 +172,29 @@ impl LinkedList {
         })
     }
 
-    /// Returns true if the list is empty.
+    /// Returns `true` if the list contains no active elements.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.size == 0
     }
 
-    /// Returns the number of active nodes in the list.
+    /// Returns the number of active elements in the list.
+    ///
     /// This is an O(1) operation.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.size
     }
 
-    /// Returns the data of the front element, if it exists.
+    /// Returns the data of the front element without removing it.
+    ///
+    /// Returns `None` if the list is empty.
+    #[must_use]
     pub fn peek_front(&self) -> Option<usize> {
         self.front.map(|front_idx| self.nodes[front_idx].data)
     }
 
-    /// Returns an iterator over the list elements.
+    /// Returns an iterator over the active elements in order.
     pub fn iter(&self) -> LinkedListIter<'_> {
         LinkedListIter {
             list: self,
@@ -150,22 +203,23 @@ impl LinkedList {
     }
 }
 
-/// An iterator over the elements of a LinkedList.
+/// An iterator over the active elements of a [`LinkedList`].
+///
+/// Created by [`LinkedList::iter`].
 pub struct LinkedListIter<'a> {
     list: &'a LinkedList,
     current: Option<usize>,
 }
 
-impl<'a> Iterator for LinkedListIter<'a> {
+impl Iterator for LinkedListIter<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(current_index) = self.current {
+        self.current.map(|current_index| {
             let node = &self.list.nodes[current_index];
             self.current = node.child;
-            return Some(node.data);
-        }
-        None
+            node.data
+        })
     }
 }
 
@@ -174,7 +228,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_iter() {
+    fn iteration() {
         let mut list = LinkedList::new();
         list.push_back(1);
         list.push_back(2);
@@ -185,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn test_iter_after_operations() {
+    fn iteration_after_removal() {
         let mut list = LinkedList::new();
         list.push_back(1);
         list.push_back(2);
@@ -197,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn test_peek_front() {
+    fn peek_front() {
         let mut list = LinkedList::new();
 
         // Empty list
@@ -207,21 +261,21 @@ mod tests {
         list.push_back(42);
         assert_eq!(list.peek_front(), Some(42));
 
-        // Multiple elements
+        // Multiple elements - peek doesn't change
         list.push_back(100);
         assert_eq!(list.peek_front(), Some(42));
 
-        // After pop_front
+        // After pop_front, peek returns new front
         list.pop_front();
         assert_eq!(list.peek_front(), Some(100));
 
-        // After popping all elements
+        // After emptying the list
         list.pop_front();
         assert_eq!(list.peek_front(), None);
     }
 
     #[test]
-    fn test_push_back_multiple_elements() {
+    fn push_back_and_linkage() {
         let mut list = LinkedList::new();
         let index1 = list.push_back(1);
         let index2 = list.push_back(2);
@@ -242,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pop_front() {
+    fn pop_front_sequence() {
         let mut list = LinkedList::new();
         list.push_back(1);
         list.push_back(2);
@@ -250,11 +304,11 @@ mod tests {
 
         assert_eq!(list.pop_front(), Some(1));
         assert_eq!(list.len(), 2);
-        assert_eq!(list.front, Some(1));
+        assert_eq!(list.front, Some(1)); // index 1 is now front
 
         assert_eq!(list.pop_front(), Some(2));
         assert_eq!(list.len(), 1);
-        assert_eq!(list.front, Some(2));
+        assert_eq!(list.front, Some(2)); // index 2 is now front
 
         assert_eq!(list.pop_front(), Some(3));
         assert_eq!(list.len(), 0);
@@ -264,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pop_by_index() {
+    fn pop_by_index() {
         let mut list = LinkedList::new();
         let index1 = list.push_back(10);
         let index2 = list.push_back(20);
@@ -274,7 +328,7 @@ mod tests {
         assert_eq!(list.pop(index2), Some(20));
         assert_eq!(list.len(), 2);
 
-        // Check that linkage is correct
+        // Check that linkage is correct (first now points to third)
         assert_eq!(list.nodes[index1].child, Some(index3));
         assert_eq!(list.nodes[index3].parent, Some(index1));
 
@@ -285,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pop_invalid_index() {
+    fn pop_invalid_index() {
         let mut list = LinkedList::new();
         list.push_back(1);
 
@@ -294,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn test_with_capacity() {
+    fn with_capacity() {
         let list = LinkedList::with_capacity(100);
         assert!(list.is_empty());
         assert!(list.nodes.capacity() >= 100);

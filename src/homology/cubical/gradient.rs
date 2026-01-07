@@ -1,19 +1,74 @@
+//! Gradient propagation for computing boundaries in the Morse complex.
+//!
+//! This module contains [`TopCubicalGradientPropagator`] which computes the
+//! boundaries of critical cells in the Morse complex by flowing boundary chains
+//! through the (previously computed) matching. It is used internally by
+//! [`TopCubicalMatching`] but may be useful for advanced users implementing
+//! custom matching workflows.
+//!
+//! [`TopCubicalMatching`]: super::TopCubicalMatching
+
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::collections::BTreeMap;
-use std::mem::replace;
+use std::{collections::BTreeMap, mem::replace};
 
-use crate::homology::cubical::orthant_matching::OrthantMatching;
-use crate::homology::cubical::subgrid::Subgrid;
 use crate::{
     Cube, CubicalComplex, Grader, HashMapModule, ModuleLike, Orthant, RingLike, TopCubeGrader,
+    homology::cubical::subgrid::{OrthantMatching, Subgrid},
 };
 
-/// Helper struct to encapsulate computation of the gradient of a CubicalComplex
-/// under a `TopCubicalMatching`. Immutably borrows the `CubicalComplex` it
-/// operates on for the duration of its lifetime.
+/// Computes the boundaries of critical cells in the Morse complex.
+///
+/// This type computes boundaries for critical cells identified by
+/// [`TopCubicalMatching`], with boundaries expressed in terms of other critical
+/// cells. It maintains working state across multiple gradient computations for
+/// efficiency.
+///
+/// # Important Note
+///
+/// **This type is not intended for general use.** It is used internally by
+/// [`TopCubicalMatching`] during the gradient computation phase. Most users
+/// should rely on [`TopCubicalMatching`] to compute matchings and gradients
+/// automatically.
+///
+/// However, in limited circumstances (such as custom matching workflows or
+/// debugging), advanced users may benefit from direct access to this type.
+///
+/// # Algorithm
+///
+/// The gradient propagation algorithm flows boundary chains through the Morse
+/// matching: queens are transformed into their kings, boundaries are computed,
+/// and the process repeats on each boundary queen until only critical cells
+/// remain.
+///
+/// # Example
+///
+/// ```
+/// use chomp3rs::{
+///     Cube, CubicalComplex, Cyclic, HashMapGrader, HashMapModule, Orthant,
+///     TopCubeGrader, homology::cubical::TopCubicalGradientPropagator,
+/// };
+///
+/// // Create a simple complex with nontrivial homology
+/// let min = Orthant::from([0, 0]);
+/// let max = Orthant::from([2, 2]);
+/// let grader = TopCubeGrader::new(
+///     HashMapGrader::uniform([Orthant::from([1, 1])], 1, 0),
+///     Some(0),
+/// );
+/// let complex: CubicalComplex<HashMapModule<Cube, Cyclic<2>>, _> =
+///     CubicalComplex::new(min, max, grader);
+///
+/// let mut propagator = TopCubicalGradientPropagator::new(&complex);
+/// let critical_cell =
+///     Cube::from_extent(Orthant::from([1, 1]), &[false, true]);
+/// let boundary = propagator.compute_gradient(&critical_cell);
+/// ```
+///
+/// [`TopCubicalMatching`]: crate::TopCubicalMatching
+/// [`gradient`]: crate::homology::cubical::gradient
 pub struct TopCubicalGradientPropagator<'a, UM, G>
 where
     UM: ModuleLike<Cell = Cube>,
@@ -30,10 +85,11 @@ where
     UM: ModuleLike<Cell = Cube>,
     G: Grader<Orthant> + Clone,
 {
-    /// Prepare the propagator to compute the gradient (boundary operator) of
-    /// `complex` under the `TopCubicalMatching`. It is expected that the
-    /// relevant critical cells are pre-computed and the boundary of each are
-    /// computed by calls to [`CubicalGradientPropagator::compute_gradient`].
+    /// Creates a new gradient propagator for the given complex.
+    ///
+    /// The propagator can be reused to compute boundaries for multiple critical
+    /// cells, reusing internal allocations for efficiency.
+    #[must_use]
     pub fn new(complex: &'a CubicalComplex<UM, TopCubeGrader<G>>) -> Self {
         Self {
             complex,
@@ -107,7 +163,7 @@ where
                         coef,
                     );
                 }
-            }
+            },
             // Each queen in the chain is transformed to its king, then its
             // boundary is computed and added to `chain` or saved for later
             // base orthants as needed.
@@ -145,7 +201,7 @@ where
                         incidence,
                     );
                 }
-            }
+            },
             // Split into the suborthants.
             OrthantMatching::Branch {
                 suborthant_matchings,
@@ -154,17 +210,22 @@ where
                 for suborthant_matching in suborthant_matchings.iter().rev() {
                     self.gradient_flow(base_orthant, suborthant_matching, orthant_chain);
                 }
-            }
+            },
         }
     }
 
-    /// Compute and return the gradient of `cell` (which is intended to be a
-    /// critical cell) under a `TopCubicalMatching`.
+    /// Computes and returns the boundary of a critical cell.
+    ///
+    /// This method flows the boundary chain through the Morse matching,
+    /// transforming matched cells until only critical cells remain in the
+    /// result.
+    #[must_use]
     pub fn compute_gradient(&mut self, cell: &Cube) -> UM {
         let cell_dimension = cell.dimension();
         if cell_dimension == 0 {
             return UM::new();
         }
+
         self.subgrid
             .set_maximum_kept_grade(self.complex.grade(cell));
         self.subgrid.set_maximum_kept_dimension(cell_dimension - 1);
@@ -204,5 +265,67 @@ where
 
         // Can run further computations without recreating this struct.
         replace(&mut self.boundary, UM::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Cube, CubicalComplex, Cyclic, HashMapGrader, HashMapModule, ModuleLike, Orthant};
+
+    #[test]
+    fn isolated_edge_boundary_computation() {
+        // Create a simple complex with nontrivial homology
+        let min = Orthant::from([0, 0]);
+        let max = Orthant::from([2, 2]);
+        let grader = TopCubeGrader::new(
+            HashMapGrader::uniform([Orthant::from([1, 1])], 1, 0),
+            Some(0),
+        );
+        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<2>>, _> =
+            CubicalComplex::new(min, max, grader);
+
+        let mut propagator = TopCubicalGradientPropagator::new(&complex);
+
+        // Create a 1-dimensional critical cell
+        let edge = Cube::from_extent(Orthant::from([1, 1]), &[false, true]);
+        let boundary = propagator.compute_gradient(&edge);
+
+        // This particular edge has no boundary (isolated) in the Morse complex:
+        assert_eq!(boundary, HashMapModule::new());
+    }
+
+    #[test]
+    fn nontrivial_boundary_computation() {
+        let min = Orthant::from([0, 0]);
+        let max = Orthant::from([2, 3]);
+        let grader = TopCubeGrader::new(
+            HashMapGrader::uniform(
+                [
+                    Orthant::from([0, 0]),
+                    Orthant::from([1, 0]),
+                    Orthant::from([0, 1]),
+                    Orthant::from([0, 2]),
+                    Orthant::from([1, 2]),
+                ],
+                0,
+                1,
+            ),
+            Some(0),
+        );
+        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<5>>, _> =
+            CubicalComplex::new(min, max, grader);
+
+        let mut propagator = TopCubicalGradientPropagator::new(&complex);
+
+        // Create a 1-dimensional critical cell
+        let edge = Cube::from_extent(Orthant::from([1, 1]), &[true, false]);
+        let boundary = propagator.compute_gradient(&edge);
+
+        // In this complex, the critical edge has nontrivial boundary
+        let mut expected_boundary = HashMapModule::new();
+        expected_boundary.insert_or_add(Cube::vertex(Orthant::from([2, 1])), Cyclic::one());
+        expected_boundary.insert_or_add(Cube::vertex(Orthant::from([2, 3])), -Cyclic::one());
+        assert_eq!(boundary, expected_boundary);
     }
 }

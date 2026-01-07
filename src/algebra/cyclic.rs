@@ -5,15 +5,17 @@
 //! The `Cyclic` class implementing the cyclic field of integers with
 //! configurable modulus.
 
-use std::convert::From;
-use std::fmt::{Debug, Display, Error, Formatter};
-use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use std::{
+    convert::From,
+    fmt::{Debug, Display, Error, Formatter},
+    ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+};
 
 use flint_sys::nmod_vec::{nmod_add, nmod_init, nmod_inv, nmod_mul, nmod_neg, nmod_sub, nmod_t};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize, de::Visitor};
 
-use crate::algebra::traits::RingLike;
+use super::RingLike;
 
 /// The field of integers modulo `MOD`, for prime modulus values `MOD`.
 ///
@@ -39,9 +41,13 @@ pub struct Cyclic<const MOD: u64> {
 }
 
 impl<const MOD: u64> Cyclic<MOD> {
-    /// Create a new `Cyclic` instance with the given value modulo `MOD`. Panics
-    /// if `MOD` is less than 2; `MOD` is expected to be a prime number,
+    /// Create a new `Cyclic` instance with the given value modulo `MOD`.
+    ///
+    /// # Panics
+    ///
+    /// If `MOD` is less than 2; `MOD` is also expected to be a prime number,
     /// though this is not explicitly checked.
+    #[must_use]
     pub fn new(value: u64) -> Self {
         assert!(
             MOD > 1,
@@ -54,7 +60,7 @@ impl<const MOD: u64> Cyclic<MOD> {
             norm: 0,
         };
         unsafe {
-            nmod_init(&mut modulus, MOD);
+            nmod_init(&raw mut modulus, MOD);
         }
 
         Self {
@@ -66,6 +72,7 @@ impl<const MOD: u64> Cyclic<MOD> {
     /// Return the canonical representative value (remainder) of this element.
     ///
     /// The returned value is always in the range `[0, MOD)`.
+    #[must_use]
     pub fn value(&self) -> u64 {
         self.remainder
     }
@@ -233,29 +240,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn construction() {
-        let a = Cyclic::<2>::from(4);
-        assert_eq!(a.value(), 0);
-
-        let b = Cyclic::<65521>::from(1);
-        assert_eq!(b.value(), 1);
+    fn construction_and_modulo() {
+        assert_eq!(Cyclic::<2>::from(4).value(), 0);
+        assert_eq!(Cyclic::<2>::from(5).value(), 1);
+        assert_eq!(Cyclic::<65521>::from(1).value(), 1);
+        assert_eq!(Cyclic::<7>::from(16).value(), 2);
     }
 
     #[test]
     #[should_panic(expected = "modulus values must be a prime number greater than or equal to 2")]
-    fn modulus_too_low() {
+    fn invalid_modulus() {
         let _a = Cyclic::<1>::from(0);
     }
 
     #[test]
-    fn negation() {
-        assert_eq!(-Cyclic::<7>::from(0), Cyclic::<7>::from(0));
-        assert_eq!(-Cyclic::<5>::from(3), Cyclic::<5>::from(2));
-        assert_eq!(-Cyclic::<2>::from(3), Cyclic::<2>::from(1));
-    }
-
-    #[test]
-    fn addition() {
+    fn arithmetic_operations() {
+        // Addition
         assert_eq!(
             Cyclic::<5>::from(1) + Cyclic::<5>::from(2),
             Cyclic::<5>::from(3)
@@ -268,10 +268,8 @@ mod tests {
         let mut a = Cyclic::<11>::from(15);
         a += Cyclic::<11>::from(2);
         assert_eq!(a, Cyclic::<11>::from(6));
-    }
 
-    #[test]
-    fn subtraction() {
+        // Subtraction
         assert_eq!(
             Cyclic::<13>::from(11) - Cyclic::<13>::from(10),
             Cyclic::<13>::from(1)
@@ -281,13 +279,11 @@ mod tests {
             Cyclic::<3>::from(2)
         );
 
-        let mut a = Cyclic::<23>::from(11);
-        a -= Cyclic::<23>::from(38);
-        assert_eq!(a, Cyclic::<23>::from(19));
-    }
+        let mut b = Cyclic::<23>::from(11);
+        b -= Cyclic::<23>::from(38);
+        assert_eq!(b, Cyclic::<23>::from(19));
 
-    #[test]
-    fn multiplication() {
+        // Multiplication
         assert_eq!(
             Cyclic::<17>::from(4) * Cyclic::<17>::from(20),
             Cyclic::<17>::from(12)
@@ -297,42 +293,53 @@ mod tests {
             Cyclic::<31>::from(2)
         );
 
-        let mut a = Cyclic::<11>::from(21);
-        a *= Cyclic::<11>::from(2);
-        assert_eq!(a, Cyclic::<11>::from(9));
-        a *= Cyclic::<11>::from(11);
-        assert_eq!(a, Cyclic::<11>::from(0));
+        let mut c = Cyclic::<11>::from(21);
+        c *= Cyclic::<11>::from(2);
+        assert_eq!(c, Cyclic::<11>::from(9));
+        c *= Cyclic::<11>::from(11);
+        assert_eq!(c, Cyclic::<11>::from(0));
+
+        // Negation
+        assert_eq!(-Cyclic::<7>::from(0), Cyclic::<7>::from(0));
+        assert_eq!(-Cyclic::<5>::from(3), Cyclic::<5>::from(2));
+        assert_eq!(-Cyclic::<2>::from(3), Cyclic::<2>::from(1));
     }
 
     #[test]
-    fn inversion() {
+    fn field_properties() {
+        // Zero and one
+        assert_eq!(Cyclic::<5>::zero(), Cyclic::<5>::from(0));
+        assert_eq!(Cyclic::<5>::one(), Cyclic::<5>::from(1));
+
+        // Invertibility
+        assert!(!Cyclic::<7>::from(0).is_invertible());
+        assert!(Cyclic::<7>::from(1).is_invertible());
+        assert!(Cyclic::<7>::from(5).is_invertible());
+
+        // Inversion for modulus 2
         assert_eq!(Cyclic::<2>::from(1).invert(), Cyclic::<2>::from(1));
         assert_eq!(
             Cyclic::<2>::from(1) * Cyclic::<2>::from(1).invert(),
-            Cyclic::<2>::from(1)
+            Cyclic::<2>::one()
         );
 
-        assert_eq!(Cyclic::<5>::from(3).invert(), Cyclic::<5>::from(2));
-        assert_eq!(
-            Cyclic::<5>::from(3) * Cyclic::<5>::from(3).invert(),
-            Cyclic::<5>::from(1)
-        );
+        // General inversion
+        let x = Cyclic::<5>::from(3);
+        assert_eq!(x * x.invert(), Cyclic::<5>::one());
 
-        assert_eq!(Cyclic::<541>::from(327).invert(), Cyclic::<541>::from(316));
-        assert_eq!(
-            Cyclic::<541>::from(327) * Cyclic::<541>::from(327).invert(),
-            Cyclic::<541>::from(1)
-        );
+        let y = Cyclic::<541>::from(327);
+        assert_eq!(y.invert(), Cyclic::<541>::from(316));
+        assert_eq!(y * y.invert(), Cyclic::<541>::one());
     }
 
     #[test]
     #[should_panic(expected = "attempting to invert equivalency class zero")]
-    fn attempt_zero_inversion() {
-        Cyclic::<17>::from(0).invert();
+    fn zero_inversion_panics() {
+        let _ = Cyclic::<17>::from(0).invert();
     }
 
     #[test]
-    fn handle_overflow_and_underflow() {
+    fn overflow_underflow_handling() {
         assert_eq!(
             Cyclic::<7>::from(u64::MAX - 3) + Cyclic::<7>::from(5),
             Cyclic::<7>::from(3)
@@ -348,13 +355,14 @@ mod tests {
     }
 
     #[test]
-    fn display() {
+    fn display_formatting() {
         assert_eq!(Cyclic::<7>::from(16).to_string(), "2 (mod 7)");
+        assert_eq!(format!("{:?}", Cyclic::<5>::from(3)), "3 (mod 5)");
     }
 
     #[cfg(feature = "serde")]
     #[test]
-    fn serialize_deserialize() {
+    fn serialization() {
         let a = Cyclic::<11>::from(6);
         assert_tokens(&a, &[Token::U64(6)]);
     }

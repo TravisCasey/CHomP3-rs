@@ -9,10 +9,9 @@
 //! implementation is `HashMapGrader`, which stores grades in a `HashMap` for
 //! efficient lookup.
 
-use std::collections::HashMap;
-use std::hash::Hash;
+use std::{collections::HashMap, hash::Hash};
 
-use super::traits::Grader;
+use super::Grader;
 
 /// A grader that stores cell grades in a `HashMap`. Cells (instances of the
 /// type parameter `B`) present in the map return their stored grade, while
@@ -59,21 +58,10 @@ where
         }
     }
 
-    /// Create a grader from an existing `HashMap`.
-    ///
-    /// The default grade for cells not in the map is set to 0. To choose a
-    /// different default grade, use the
-    /// [`HashMapGrader::from_map_with_default`] method.
+    /// Create a grader from an existing `HashMap` with a specified default
+    /// grade for cells not in the map.
     #[must_use]
-    pub fn from_map(grades: HashMap<B, u32>) -> Self {
-        Self {
-            grades,
-            default_grade: 0,
-        }
-    }
-
-    /// Create a grader from an existing `HashMap` with a custom default grade.
-    pub fn from_map_with_default(grades: HashMap<B, u32>, default_grade: u32) -> Self {
+    pub fn from_map(grades: HashMap<B, u32>, default_grade: u32) -> Self {
         Self {
             grades,
             default_grade,
@@ -151,6 +139,7 @@ where
     }
 
     /// Get an immutable reference to the underlying `HashMap`.
+    #[must_use]
     pub fn grades(&self) -> &HashMap<B, u32> {
         &self.grades
     }
@@ -164,7 +153,7 @@ where
         &mut self.grades
     }
 
-    /// Get the default grade returned for cells not in the map.
+    /// Returns the default grade for cells not in the map.
     #[must_use]
     pub fn default_grade(&self) -> u32 {
         self.default_grade
@@ -189,11 +178,14 @@ impl<B> FromIterator<(B, u32)> for HashMapGrader<B>
 where
     B: Hash + Eq + Clone,
 {
+    /// Creates a grader from an iterator of (cell, grade) pairs.
+    ///
+    /// The default grade for cells not in the iterator is 0.
     fn from_iter<T>(iter: T) -> Self
     where
         T: IntoIterator<Item = (B, u32)>,
     {
-        Self::from_map(HashMap::from_iter(iter))
+        Self::from_map(HashMap::from_iter(iter), 0)
     }
 }
 
@@ -202,12 +194,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_from_map() {
+    fn from_map() {
         let mut map = HashMap::new();
         map.insert([0, 1], 1);
         map.insert([1, 0], 2);
 
-        let grader = HashMapGrader::from_map(map);
+        let grader = HashMapGrader::from_map(map, 0);
         assert_eq!(grader.grade(&[0, 1]), 1);
         assert_eq!(grader.grade(&[1, 0]), 2);
         assert_eq!(grader.grade(&[1, 1]), 0);
@@ -215,14 +207,15 @@ mod tests {
         let mut map = HashMap::new();
         map.insert((5, 10), 5);
 
-        let grader = HashMapGrader::from_map_with_default(map, 999);
+        let grader = HashMapGrader::from_map(map, 999);
         assert_eq!(grader.grade(&(5, 10)), 5);
         assert_eq!(grader.grade(&(0, 0)), 999);
         assert_eq!(grader.default_grade(), 999);
     }
 
     #[test]
-    fn test_from_cells_with_fn() {
+    #[allow(clippy::cast_sign_loss)]
+    fn from_cells_with_fn() {
         let cells = vec![5i16, 15i16, 150i16];
         let grader = HashMapGrader::from_cells_with_fn(cells, |cell| (*cell / 5) as u32);
 
@@ -233,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_iter() {
+    fn from_iter() {
         let grader: HashMapGrader<i8> = vec![(1, 1), (2, 2), (3, 3)].into_iter().collect();
 
         assert_eq!(grader.grade(&1), 1);
@@ -243,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mutable_access() {
+    fn mutable_access() {
         let mut grader = HashMapGrader::new(0);
 
         // Add grades using mutable reference
@@ -258,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn test_set_default_grade() {
+    fn set_default_grade() {
         let mut grader: HashMapGrader<[u16; 3]> = HashMapGrader::new(0);
 
         assert_eq!(grader.grade(&[100, 200, 300]), 0);
@@ -270,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn test_uniform() {
+    fn uniform() {
         let cells = vec!["a", "b", "c"];
         let grader = HashMapGrader::uniform(cells, 42, 7);
 

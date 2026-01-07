@@ -2,33 +2,98 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::collections::HashMap;
-use std::hash::Hash;
-use std::marker::PhantomData;
-use std::mem::take;
+//! Coreduction-based discrete Morse matching.
+//!
+//! This module provides [`CoreductionMatching`], a general-purpose algorithm
+//! for computing acyclic partial matchings on arbitrary cell complexes. It
+//! works by alternately excising coreduction pairs and leaf cells from the
+//! Hasse diagram.
+//!
+//! For cubical complexes, prefer
+//! [`TopCubicalMatching`](super::TopCubicalMatching) which exploits the grid
+//! structure for better performance.
 
-use crate::homology::util::LinkedList;
-use crate::{ComplexLike, HashMapModule, MatchResult, ModuleLike, MorseMatching, RingLike};
+use std::{collections::HashMap, hash::Hash, marker::PhantomData, mem::take};
 
-/// A type implementing an acyclic partial matching (that is, satisfying
-/// [`MorseMatching`]) based on alternately excising coreduction pairs and leaf
-/// cells from the Hasse diagram of the complex.
+use crate::{
+    CellMatch, ComplexLike, HashMapModule, ModuleLike, MorseMatching, RingLike,
+    homology::linked_list::LinkedList,
+};
+
+/// A general-purpose acyclic partial matching based on coreduction.
 ///
-/// This matching can be applied to any complex (satisfying [`ComplexLike`]) so
-/// long as its cell type satisfies the `Hash` trait. The matches for each cell
-/// are explicitly stored after computation indivdually querying the full
-/// algorithm is inefficient; thus, the complex must be small enough that
-/// explicit storage is possible.
+/// This implementation computes a discrete Morse matching by alternately
+/// excising coreduction pairs (cells with exactly one face) and leaf cells
+/// (cells with no faces) from the Hasse diagram of the complex.
 ///
-/// In practice, this method is slower than specialized heuristics for creating
-/// partial matching. It's redeeming trait, however, is its applicability to
-/// general cell complexes. This matching is commonly computed for Morse
-/// complexes obtained after using a more specialized partial matching for the
-/// larger top-level complex.
+/// # When to Use
 ///
-/// The implementation is a reformulation of Algorithm 3.6 in Harker,
-/// Mischaikow, Mrozek, Nanda, *Discrete Morse Theoretic Algorithms for
-/// Computing Homology of Complexes and Maps.*
+/// - **General cell complexes**: Works on any type implementing [`ComplexLike`]
+///   with hashable cells.
+/// - **Morse complex reduction**: Used as the generic matching in
+///   [`MorseMatching::full_reduce`] to further reduce Morse complexes.
+/// - **Small to medium complexes**: Since matches are stored explicitly, the
+///   complex must fit in memory.
+///
+/// # Algorithm
+///
+/// The algorithm maintains the Hasse diagram as a graph where:
+/// - Nodes represent cells
+/// - Edges represent face/coface relationships with nonzero incidence
+///
+/// It repeatedly:
+/// 1. Identifies cells with exactly one face (coreduction pairs)
+/// 2. Matches and excises these pairs
+/// 3. Identifies cells with no faces (leaves)
+/// 4. Marks leaves as critical (ace) cells and excises them
+///
+/// This process continues until all cells are either matched or marked
+/// critical.
+///
+/// # Example
+///
+/// ```
+/// use chomp3rs::{
+///     CellComplex, CoreductionMatching, Cyclic, HashMapModule, ModuleLike,
+///     MorseMatching, RingLike,
+/// };
+///
+/// // Create a line segment: two vertices (cells 0, 1) and one edge (cell 2)
+/// type Module = HashMapModule<u32, Cyclic<2>>;
+///
+/// let mut boundaries = vec![Module::new(), Module::new(), Module::new()];
+/// boundaries[2].insert_or_add(1, Cyclic::one()); // edge: v1 - v0
+/// boundaries[2].insert_or_add(0, -Cyclic::one());
+///
+/// let mut coboundaries = vec![Module::new(), Module::new(), Module::new()];
+/// coboundaries[0].insert_or_add(2, -Cyclic::one());
+/// coboundaries[1].insert_or_add(2, Cyclic::one());
+///
+/// let complex = CellComplex::new(
+///     vec![0, 0, 1], // dimensions
+///     vec![0, 0, 0], // grades
+///     boundaries,
+///     coboundaries,
+/// );
+///
+/// let mut matching = CoreductionMatching::new();
+/// matching.compute_matching(complex);
+///
+/// // Line segment is contractible -> one critical cell (a point)
+/// assert_eq!(matching.critical_cells().len(), 1);
+/// ```
+///
+/// # Panics
+///
+/// Most methods from [`MorseMatching`] panic if called before
+/// [`compute_matching`](MorseMatching::compute_matching). The panic message
+/// will indicate that `compute_matching` must be called first.
+///
+/// # References
+///
+/// The implementation is based on Algorithm 3.6 in Harker, Mischaikow, Mrozek,
+/// and Nanda, *Discrete Morse Theoretic Algorithms for Computing Homology of
+/// Complexes and Maps*.
 #[derive(Debug, Clone)]
 pub struct CoreductionMatching<C, M = HashMapModule<u32, <C as ComplexLike>::Ring>>
 where
@@ -38,7 +103,7 @@ where
     complex: Option<C>,
     critical_cells: Vec<C::Cell>,
     projection: HashMap<C::Cell, u32>,
-    matches: HashMap<C::Cell, MatchResult<C::Cell, C::Ring, u32>>,
+    matches: HashMap<C::Cell, CellMatch<C::Cell, C::Ring, u32>>,
     lower_module_type: PhantomData<M>,
 }
 
@@ -47,12 +112,13 @@ where
     C: ComplexLike,
     C::Cell: Hash,
 {
-    /// Initialize a matching with default options (cells of all grades are
-    /// kept).
+    /// Create a new coreduction matching.
     ///
-    /// No matching is performed until [`CoreductionMatching::compute_matching`]
-    /// has been called and thus most methods from the [`MorseMatching`] trait
-    /// implementation will panic if called before.
+    /// The matching is not computed until
+    /// [`compute_matching`](MorseMatching::compute_matching) is called.
+    /// Most other methods will panic if called before computing
+    /// the matching.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             complex: None,
@@ -106,37 +172,45 @@ where
     }
 
     fn critical_cells(&self) -> Vec<Self::UpperCell> {
-        if self.complex.is_none() {
-            panic!("MorseMatching method called prior to compute_matching");
-        }
+        assert!(
+            self.complex.is_some(),
+            "matching not yet computed; call compute_matching first"
+        );
         self.critical_cells.clone()
     }
 
     fn project_cell(&self, cell: Self::UpperCell) -> Option<u32> {
-        if self.complex.is_none() {
-            panic!("MorseMatching method called prior to compute_matching");
-        }
+        assert!(
+            self.complex.is_some(),
+            "matching not yet computed; call compute_matching first"
+        );
         self.projection.get(&cell).copied()
     }
 
     fn include_cell(&self, cell: u32) -> Self::UpperCell {
-        if self.complex.is_none() {
-            panic!("MorseMatching method called prior to compute_matching");
-        }
+        assert!(
+            self.complex.is_some(),
+            "matching not yet computed; call compute_matching first"
+        );
         self.critical_cells[cell as usize].clone()
     }
 
     fn match_cell(
         &self,
         cell: &Self::UpperCell,
-    ) -> MatchResult<Self::UpperCell, Self::Ring, Self::Priority> {
-        if self.complex.is_none() {
-            panic!("MorseMatching method called prior to compute_matching");
-        }
+    ) -> CellMatch<Self::UpperCell, Self::Ring, Self::Priority> {
+        assert!(
+            self.complex.is_some(),
+            "matching not yet computed; call compute_matching first"
+        );
         self.matches[cell].clone()
     }
 }
 
+/// A node in the Hasse diagram representing a single cell.
+///
+/// Tracks the cell's faces (lower-dimensional neighbors) and cofaces
+/// (higher-dimensional neighbors) via linked lists for O(1) removal.
 struct CoreductionNode<T> {
     cofaces: LinkedList,
     faces: LinkedList,
@@ -144,6 +218,10 @@ struct CoreductionNode<T> {
     cell: T,
 }
 
+/// An edge in the Hasse diagram representing a face/coface relationship.
+///
+/// Connects a parent (higher-dimensional cell) to a child (face) with an
+/// incidence coefficient.
 struct CoreductionFace<R> {
     parent: usize,
     parent_face_index: usize,
@@ -152,13 +230,17 @@ struct CoreductionFace<R> {
     incidence: R,
 }
 
+/// Internal implementation of the coreduction algorithm.
+///
+/// This type holds the mutable state during matching computation and is
+/// consumed to produce the final matching result.
 struct CoreductionMatchingImpl<C>
 where
     C: ComplexLike,
     C::Cell: Hash,
 {
     critical_cells: Vec<C::Cell>,
-    matches: HashMap<C::Cell, MatchResult<C::Cell, C::Ring, u32>>,
+    matches: HashMap<C::Cell, CellMatch<C::Cell, C::Ring, u32>>,
     indices: HashMap<C::Cell, u32>,
     leaves: LinkedList,
     nodes: Vec<CoreductionNode<C::Cell>>,
@@ -175,14 +257,14 @@ where
         complex: &C,
     ) -> (
         Vec<C::Cell>,
-        HashMap<C::Cell, MatchResult<C::Cell, C::Ring, u32>>,
+        HashMap<C::Cell, CellMatch<C::Cell, C::Ring, u32>>,
     ) {
         // Map each cell in `complex` to its index in the iterator from
-        // `complex.cell_iter()`.
+        // `complex.iter()`.
         // These indices are used to store the cells
         // contiguously for efficient lookup/manipulations during matching.
         let mut indices = HashMap::new();
-        for (index, cell) in complex.cell_iter().enumerate() {
+        for (index, cell) in complex.iter().enumerate() {
             indices.insert(cell, index as u32);
         }
         let cell_count = indices.len();
@@ -197,7 +279,7 @@ where
         // present. Should the cell be excised as a coreduction pair, this
         // allows it to be removed from the `leaves` linked list.
         let mut nodes = Vec::with_capacity(cell_count);
-        for cell in complex.cell_iter() {
+        for cell in complex.iter() {
             debug_assert_eq!(indices[&cell] as usize, nodes.len());
             nodes.push(CoreductionNode {
                 cofaces: LinkedList::new(),
@@ -246,10 +328,10 @@ where
         // consistent between `matching.critical_cells` and `matching.matches`
         #[cfg(debug_assertions)]
         {
-            for cell in complex.cell_iter() {
+            for cell in complex.iter() {
                 let match_result = matching.matches.get(&cell).expect("cell not matched");
                 let critical = matching.critical_cells.contains(&cell);
-                debug_assert!(!(critical ^ matches!(match_result, MatchResult::Ace { .. })));
+                debug_assert!(!(critical ^ match_result.is_ace()));
             }
         }
 
@@ -257,9 +339,9 @@ where
         // themselves.
         #[cfg(debug_assertions)]
         {
-            for cell in complex.cell_iter() {
+            for cell in complex.iter() {
                 match &matching.matches[&cell] {
-                    MatchResult::King {
+                    CellMatch::King {
                         cell: king,
                         queen,
                         incidence,
@@ -268,15 +350,15 @@ where
                         debug_assert_eq!(cell, *king);
                         debug_assert_eq!(
                             matching.matches[queen],
-                            MatchResult::Queen {
+                            CellMatch::Queen {
                                 cell: queen.clone(),
                                 king: king.clone(),
                                 incidence: incidence.clone(),
                                 priority: (priority + 1)
                             }
                         );
-                    }
-                    MatchResult::Queen {
+                    },
+                    CellMatch::Queen {
                         cell: queen,
                         king,
                         incidence,
@@ -285,18 +367,18 @@ where
                         debug_assert_eq!(cell, *queen);
                         debug_assert_eq!(
                             matching.matches[king],
-                            MatchResult::King {
+                            CellMatch::King {
                                 cell: king.clone(),
                                 queen: queen.clone(),
                                 incidence: incidence.clone(),
                                 priority: (priority - 1)
                             }
                         );
-                    }
-                    MatchResult::Ace { cell: ace } => {
+                    },
+                    CellMatch::Ace { cell: ace } => {
                         debug_assert_eq!(cell, *ace);
-                    }
-                };
+                    },
+                }
             }
         }
 
@@ -305,7 +387,7 @@ where
 
     fn initialize_hasse(&mut self, complex: &C) -> Vec<usize> {
         let mut initial_pairs = Vec::new();
-        for (index, cell) in complex.cell_iter().enumerate() {
+        for (index, cell) in complex.iter().enumerate() {
             let grade = complex.grade(&cell);
 
             // All faces with nonzero incidence and identical grade
@@ -364,7 +446,7 @@ where
 
         self.matches.insert(
             self.nodes[upper_index].cell.clone(),
-            MatchResult::King {
+            CellMatch::King {
                 cell: self.nodes[upper_index].cell.clone(),
                 queen: self.nodes[lower_index].cell.clone(),
                 incidence: self.faces[upper_face_index].incidence.clone(),
@@ -373,7 +455,7 @@ where
         );
         self.matches.insert(
             self.nodes[lower_index].cell.clone(),
-            MatchResult::Queen {
+            CellMatch::Queen {
                 cell: self.nodes[lower_index].cell.clone(),
                 king: self.nodes[upper_index].cell.clone(),
                 incidence: self.faces[upper_face_index].incidence.clone(),
@@ -520,7 +602,7 @@ where
             .push(self.nodes[node_index].cell.clone());
         self.matches.insert(
             self.nodes[node_index].cell.clone(),
-            MatchResult::Ace {
+            CellMatch::Ace {
                 cell: self.nodes[node_index].cell.clone(),
             },
         );
@@ -541,7 +623,7 @@ mod tests {
     type TestCubicalModule = HashMapModule<Cube, Cyclic<5>>;
 
     #[test]
-    fn test_line_segment_cell_complex() {
+    fn line_segment_cell_complex() {
         // Test a line segment: two vertices and one edge
         // The edge should form a coreduction pair with one vertex
         let cell_dimensions = vec![0, 0, 1]; // vertex0, vertex1, edge
@@ -571,9 +653,9 @@ mod tests {
 
         for cell in 0..3 {
             match matching.match_cell(&cell) {
-                MatchResult::Ace { .. } => aces += 1,
-                MatchResult::King { .. } => kings += 1,
-                MatchResult::Queen { .. } => queens += 1,
+                CellMatch::Ace { .. } => aces += 1,
+                CellMatch::King { .. } => kings += 1,
+                CellMatch::Queen { .. } => queens += 1,
             }
         }
 
@@ -584,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn test_triangle_cell_complex() {
+    fn triangle_cell_complex() {
         // Test a triangle: 3 vertices, 3 edges, 1 face
         let cell_dimensions = vec![0, 0, 0, 1, 1, 1, 2]; // 3 vertices, 3 edges, 1 face
         let grades = vec![0, 0, 0, 0, 0, 0, 0];
@@ -629,22 +711,18 @@ mod tests {
         assert_eq!(matching.critical_cells().len(), 1);
 
         // Verify all cells are either critical or matched
-        let critical_set: HashSet<u32> = matching.critical_cells().iter().cloned().collect();
+        let critical_set: HashSet<u32> = matching.critical_cells().iter().copied().collect();
         let mut matched_count = 0;
 
         for cell in 0..7 {
             match matching.match_cell(&cell) {
-                MatchResult::Ace { .. } => {
+                CellMatch::Ace { .. } => {
                     assert!(critical_set.contains(&cell));
-                }
-                MatchResult::King { incidence, .. } => {
+                },
+                CellMatch::King { incidence, .. } | CellMatch::Queen { incidence, .. } => {
                     assert!(incidence.is_invertible());
                     matched_count += 1;
-                }
-                MatchResult::Queen { incidence, .. } => {
-                    assert!(incidence.is_invertible());
-                    matched_count += 1;
-                }
+                },
             }
         }
 
@@ -652,17 +730,17 @@ mod tests {
     }
 
     #[test]
-    fn test_line_segment_cubical_complex() {
+    fn line_segment_cubical_complex() {
         // Create a 1D line segment from [0] to [1]
-        let min = Orthant::new(vec![0]);
-        let max = Orthant::new(vec![1]);
+        let min = Orthant::from([0]);
+        let max = Orthant::from([1]);
 
         let cells = vec![
-            Cube::vertex(Orthant::new(vec![0])),
-            Cube::vertex(Orthant::new(vec![1])),
-            Cube::from_extent(Orthant::new(vec![0]), &[true]),
+            Cube::vertex(Orthant::from([0])),
+            Cube::vertex(Orthant::from([1])),
+            Cube::from_extent(Orthant::from([0]), &[true]),
         ];
-        let grader = HashMapGrader::uniform(cells.into_iter(), 0, 1);
+        let grader = HashMapGrader::uniform(cells, 0, 1);
         let complex: CubicalComplex<TestCubicalModule, _> = CubicalComplex::new(min, max, grader);
 
         let mut matching = CoreductionMatching::new();
@@ -679,24 +757,24 @@ mod tests {
         );
 
         // Verify the edge forms a coreduction pair with one of its boundary vertices
-        let edge = Cube::from_extent(Orthant::new(vec![0]), &[true]);
-        let vertex0 = Cube::vertex(Orthant::new(vec![0]));
-        let vertex1 = Cube::vertex(Orthant::new(vec![1]));
+        let edge = Cube::from_extent(Orthant::from([0]), &[true]);
+        let vertex0 = Cube::vertex(Orthant::from([0]));
+        let vertex1 = Cube::vertex(Orthant::from([1]));
 
         let mut found_king_queen_pair = false;
         let cells = vec![vertex0.clone(), vertex1.clone(), edge.clone()];
 
         for cell in &cells {
             match matching.match_cell(cell) {
-                MatchResult::King { queen, .. } => {
+                CellMatch::King { queen, .. } => {
                     assert!(cells.contains(&queen));
                     found_king_queen_pair = true;
-                }
-                MatchResult::Queen { king, .. } => {
+                },
+                CellMatch::Queen { king, .. } => {
                     assert!(cells.contains(&king));
                     found_king_queen_pair = true;
-                }
-                MatchResult::Ace { .. } => {}
+                },
+                CellMatch::Ace { .. } => {},
             }
         }
 
@@ -707,26 +785,26 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_square_cubical_complex() {
+    fn empty_square_cubical_complex() {
         // Create a cubical complex on 2x2 grid of orthants
-        let min = Orthant::new(vec![0, 0]);
-        let max = Orthant::new(vec![2, 1]);
+        let min = Orthant::from([0, 0]);
+        let max = Orthant::from([2, 1]);
 
         // Empty square in orthants (0, 0) to (1, 1), with an extra edge
         let cells = [
-            Cube::vertex(Orthant::new(vec![0, 0])),
-            Cube::vertex(Orthant::new(vec![1, 0])),
-            Cube::vertex(Orthant::new(vec![0, 1])),
-            Cube::vertex(Orthant::new(vec![1, 1])),
-            Cube::vertex(Orthant::new(vec![2, 1])),
-            Cube::from_extent(Orthant::new(vec![0, 0]), &[true, false]),
-            Cube::from_extent(Orthant::new(vec![1, 0]), &[false, true]),
-            Cube::from_extent(Orthant::new(vec![0, 1]), &[true, false]),
-            Cube::from_extent(Orthant::new(vec![0, 0]), &[false, true]),
-            Cube::from_extent(Orthant::new(vec![1, 1]), &[true, false]),
+            Cube::vertex(Orthant::from([0, 0])),
+            Cube::vertex(Orthant::from([1, 0])),
+            Cube::vertex(Orthant::from([0, 1])),
+            Cube::vertex(Orthant::from([1, 1])),
+            Cube::vertex(Orthant::from([2, 1])),
+            Cube::from_extent(Orthant::from([0, 0]), &[true, false]),
+            Cube::from_extent(Orthant::from([1, 0]), &[false, true]),
+            Cube::from_extent(Orthant::from([0, 1]), &[true, false]),
+            Cube::from_extent(Orthant::from([0, 0]), &[false, true]),
+            Cube::from_extent(Orthant::from([1, 1]), &[true, false]),
         ];
 
-        let grader = HashMapGrader::uniform(cells.into_iter(), 0, 1);
+        let grader = HashMapGrader::uniform(cells, 0, 1);
         let complex: CubicalComplex<TestCubicalModule, _> = CubicalComplex::new(min, max, grader);
 
         let mut matching = CoreductionMatching::new();
@@ -750,19 +828,63 @@ mod tests {
         );
 
         // Verify that the matching preserves the total number of cells
-        let all_cells: Vec<_> = complex.cell_iter().collect();
+        let all_cells: Vec<_> = complex.iter().collect();
         let critical_count = matching.critical_cells().len();
         let mut matched_count = 0;
 
         for cell in &all_cells {
             match matching.match_cell(cell) {
-                MatchResult::Ace { .. } => {}
-                MatchResult::King { .. } | MatchResult::Queen { .. } => {
+                CellMatch::Ace { .. } => {},
+                CellMatch::King { .. } | CellMatch::Queen { .. } => {
                     matched_count += 1;
-                }
+                },
             }
         }
 
         assert_eq!(critical_count + matched_count, all_cells.len());
+    }
+
+    #[test]
+    fn empty_complex() {
+        // A complex with no cells
+        let complex: CellComplex<TestModule> = CellComplex::new(vec![], vec![], vec![], vec![]);
+
+        let mut matching = CoreductionMatching::new();
+        matching.compute_matching(complex);
+
+        assert!(matching.critical_cells().is_empty());
+    }
+
+    #[test]
+    fn single_cell_complex() {
+        // A complex with just one vertex (automatically critical)
+        let complex: CellComplex<TestModule> = CellComplex::new(
+            vec![0],                 // dimension 0
+            vec![0],                 // grade 0
+            vec![TestModule::new()], // no boundary
+            vec![TestModule::new()], // no coboundary
+        );
+
+        let mut matching = CoreductionMatching::new();
+        matching.compute_matching(complex);
+
+        // Single cell must be critical
+        assert_eq!(matching.critical_cells().len(), 1);
+        assert_eq!(matching.critical_cells()[0], 0);
+        assert!(matching.match_cell(&0).is_ace());
+    }
+
+    #[test]
+    #[should_panic(expected = "matching not yet computed")]
+    fn panic_before_compute_critical_cells() {
+        let matching: CoreductionMatching<CellComplex<TestModule>> = CoreductionMatching::new();
+        let _ = matching.critical_cells();
+    }
+
+    #[test]
+    #[should_panic(expected = "matching not yet computed")]
+    fn panic_before_compute_match_cell() {
+        let matching: CoreductionMatching<CellComplex<TestModule>> = CoreductionMatching::new();
+        let _ = matching.match_cell(&0);
     }
 }

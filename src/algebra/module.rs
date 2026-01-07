@@ -2,18 +2,26 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, hash_map};
-use std::convert::From;
-use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
-use std::hash::{BuildHasher, Hash, RandomState};
-use std::iter::{Filter, FromIterator};
-use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
+//! HashMap-based module implementation.
+//!
+//! This module provides [`HashMapModule`], a sparse implementation of
+//! [`ModuleLike`] using hash tables for coefficient storage. This is the
+//! recommended module implementation when the basis set is large and most
+//! coefficients are zero.
 
-use crate::{ModuleLike, RingLike};
+use std::{
+    collections::{HashMap, hash_map, hash_map::Entry},
+    convert::From,
+    fmt::{Debug, Display, Formatter, Result as FmtResult},
+    hash::{BuildHasher, Hash, RandomState},
+    iter::{Filter, FromIterator},
+    ops::{Add, AddAssign, Neg, Sub, SubAssign},
+};
+
+use super::{ModuleLike, RingLike};
 
 /// HashMap-based implementation of algebraic modules.
-///
+///5
 /// This module provides [`HashMapModule`], a concrete implementation of the
 /// [`ModuleLike`] trait using [`std::collections::HashMap`] as the underlying
 /// storage mechanism. This implementation is recommended when the number of
@@ -23,13 +31,8 @@ use crate::{ModuleLike, RingLike};
 /// # Mathematical Background
 ///
 /// An algebraic module over a ring `R` with basis type `B` represents formal
-/// linear combinations of the form:
-///
-/// $ a_1c_1 + a_2c_2 + ... + a_nc_n $
-///
-/// where:
-/// - `a_i` are coefficients in the ring `R`
-/// - `c_i` are basis elements of type `B`
+/// linear combinations of coefficients in the ring `R` and basis elements of
+/// type `B`
 ///
 /// # Examples
 ///
@@ -46,8 +49,8 @@ use crate::{ModuleLike, RingLike};
 /// module.insert_or_add(2, Cyclic::from(4));
 /// module.insert_or_add(1, Cyclic::from(3)); // Adds to existing coefficient
 ///
-/// assert_eq!(module.coef(&1), Cyclic::from(1)); // 3 + 3 = 1 (mod 5)
-/// assert_eq!(module.coef(&2), Cyclic::from(4));
+/// assert_eq!(module.coefficient(&1), Cyclic::from(1)); // 3 + 3 = 1 (mod 5)
+/// assert_eq!(module.coefficient(&2), Cyclic::from(4));
 /// ```
 ///
 /// ## Module arithmetic
@@ -63,9 +66,9 @@ use crate::{ModuleLike, RingLike};
 ///     HashMapModule::from([(1, Cyclic::from(5)), (3, Cyclic::from(1))]);
 ///
 /// let sum = module1 + module2;
-/// assert_eq!(sum.coef(&1), Cyclic::from(1)); // 3 + 5 = 1 (mod 7)
-/// assert_eq!(sum.coef(&2), Cyclic::from(3));
-/// assert_eq!(sum.coef(&3), Cyclic::from(1));
+/// assert_eq!(sum.coefficient(&1), Cyclic::from(1)); // 3 + 5 = 1 (mod 7)
+/// assert_eq!(sum.coefficient(&2), Cyclic::from(3));
+/// assert_eq!(sum.coefficient(&3), Cyclic::from(1));
 /// ```
 ///
 /// ## Scalar multiplication
@@ -79,19 +82,20 @@ use crate::{ModuleLike, RingLike};
 /// ]);
 /// module = module.scalar_mul(Cyclic::from(2));
 ///
-/// assert_eq!(module.coef(&1), Cyclic::from(4)); // 2 * 2 = 4 (mod 4)
-/// assert_eq!(module.coef(&2), Cyclic::from(1)); // 3 * 2 = 6 = 1 (mod 5)
+/// assert_eq!(module.coefficient(&1), Cyclic::from(4)); // 2 * 2 = 4 (mod 4)
+/// assert_eq!(module.coefficient(&2), Cyclic::from(1)); // 3 * 2 = 6 = 1 (mod 5)
 /// ```
 #[derive(Clone)]
-pub struct HashMapModule<B, R, H = RandomState> {
-    map: HashMap<B, R, H>,
+pub struct HashMapModule<B, R, S = RandomState> {
+    map: HashMap<B, R, S>,
 }
 
-impl<B, R, H: Default> HashMapModule<B, R, H> {
+impl<B, R, S: Default> HashMapModule<B, R, S> {
     /// Create a new `HashMapModule` with the given capacity.
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            map: HashMap::<B, R, H>::with_capacity_and_hasher(capacity, H::default()),
+            map: HashMap::<B, R, S>::with_capacity_and_hasher(capacity, S::default()),
         }
     }
 }
@@ -116,11 +120,11 @@ impl<B: Clone + Debug + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone
         self.map.clear();
     }
 
-    fn coef(&self, cell: &B) -> R {
+    fn coefficient(&self, cell: &B) -> R {
         self.map.get(cell).cloned().unwrap_or(R::zero())
     }
 
-    fn coef_mut(&mut self, cell: &B) -> &mut R {
+    fn coefficient_mut(&mut self, cell: &B) -> &mut R {
         self.map.entry(cell.clone()).or_insert_with(|| R::zero())
     }
 
@@ -128,34 +132,36 @@ impl<B: Clone + Debug + Eq + Hash, R: RingLike, H: BuildHasher + Default + Clone
         self.map.remove(cell).unwrap_or(R::zero())
     }
 
-    fn scalar_mul(mut self, coef: R) -> Self {
-        if coef == R::zero() {
+    fn scalar_mul(mut self, coefficient: R) -> Self {
+        if coefficient == R::zero() {
             self.clear();
-        } else if coef != R::one() {
-            for (_, cell_coef) in self.map.iter_mut() {
-                *cell_coef *= coef.clone();
+        } else if coefficient != R::one() {
+            for cell_coefficient in self.map.values_mut() {
+                *cell_coefficient *= coefficient.clone();
             }
         }
         self
     }
 
     fn iter(&self) -> Self::Iter<'_> {
-        self.map.iter().filter(|&(_cell, coef)| *coef != R::zero())
+        self.map
+            .iter()
+            .filter(|&(_cell, coefficient)| *coefficient != R::zero())
     }
 
-    fn insert_or_add(&mut self, cell: Self::Cell, coef: Self::Ring) {
-        if coef != Self::Ring::zero() {
+    fn insert_or_add(&mut self, cell: Self::Cell, coefficient: Self::Ring) {
+        if coefficient != Self::Ring::zero() {
             match self.map.entry(cell) {
                 Entry::Occupied(mut o) => {
-                    if coef.clone() + o.get().clone() == Self::Ring::zero() {
+                    if coefficient.clone() + o.get().clone() == Self::Ring::zero() {
                         o.remove();
                     } else {
-                        *o.get_mut() += coef;
+                        *o.get_mut() += coefficient;
                     }
-                }
+                },
                 Entry::Vacant(v) => {
-                    v.insert(coef);
-                }
+                    v.insert(coefficient);
+                },
             }
         }
     }
@@ -170,7 +176,7 @@ where
         let non_zero: Vec<_> = self
             .map
             .iter()
-            .filter(|(_, coef)| **coef != R::zero())
+            .filter(|(_, coefficient)| **coefficient != R::zero())
             .collect();
 
         if non_zero.is_empty() {
@@ -178,16 +184,16 @@ where
         }
 
         let mut first = true;
-        for (cell, coef) in non_zero {
+        for (cell, coefficient) in non_zero {
             if !first {
                 write!(f, " + ")?;
             }
             first = false;
 
-            if *coef == R::one() {
-                write!(f, "{}", cell)?;
+            if *coefficient == R::one() {
+                write!(f, "{cell}")?;
             } else {
-                write!(f, "{}*{}", coef, cell)?;
+                write!(f, "{coefficient}*{cell}")?;
             }
         }
         Ok(())
@@ -204,8 +210,8 @@ impl<B, R: RingLike, H> Neg for HashMapModule<B, R, H> {
     type Output = Self;
 
     fn neg(mut self) -> Self::Output {
-        for (_cell, coef) in self.map.iter_mut() {
-            *coef = -coef.clone();
+        for coefficient in &mut self.map.values_mut() {
+            *coefficient = -coefficient.clone();
         }
         self
     }
@@ -216,13 +222,13 @@ where
     HashMapModule<B, R, H>: ModuleLike<Cell = B, Ring = R>,
 {
     fn add_assign(&mut self, rhs: Self) {
-        for (cell, coef) in rhs.map.iter() {
-            if *coef != R::zero() {
-                let new_coef = self.coef(cell) + coef.clone();
-                if new_coef != R::zero() {
-                    self.map.insert(cell.clone(), new_coef);
-                } else {
+        for (cell, coefficient) in &rhs.map {
+            if *coefficient != R::zero() {
+                let new_coefficient = self.coefficient(cell) + coefficient.clone();
+                if new_coefficient == R::zero() {
                     self.map.remove(cell);
+                } else {
+                    self.map.insert(cell.clone(), new_coefficient);
                 }
             }
         }
@@ -246,13 +252,13 @@ where
     HashMapModule<B, R, H>: ModuleLike<Cell = B, Ring = R>,
 {
     fn sub_assign(&mut self, rhs: Self) {
-        for (cell, coef) in rhs.map.iter() {
-            if *coef != R::zero() {
-                let new_coef = self.coef(cell) - coef.clone();
-                if new_coef != R::zero() {
-                    self.map.insert(cell.clone(), new_coef);
-                } else {
+        for (cell, coefficient) in &rhs.map {
+            if *coefficient != R::zero() {
+                let new_coefficient = self.coefficient(cell) - coefficient.clone();
+                if new_coefficient == R::zero() {
                     self.map.remove(cell);
+                } else {
+                    self.map.insert(cell.clone(), new_coefficient);
                 }
             }
         }
@@ -281,15 +287,15 @@ where
         let self_non_zero: HashMap<_, _> = self
             .map
             .iter()
-            .filter(|(_, coef)| **coef != R::zero())
-            .map(|(cell, coef)| (cell.clone(), coef.clone()))
+            .filter(|(_, coefficient)| **coefficient != R::zero())
+            .map(|(cell, coefficient)| (cell.clone(), coefficient.clone()))
             .collect();
 
         let other_non_zero: HashMap<_, _> = other
             .map
             .iter()
-            .filter(|(_, coef)| **coef != R::zero())
-            .map(|(cell, coef)| (cell.clone(), coef.clone()))
+            .filter(|(_, coefficient)| **coefficient != R::zero())
+            .map(|(cell, coefficient)| (cell.clone(), coefficient.clone()))
             .collect();
 
         self_non_zero == other_non_zero
@@ -340,310 +346,156 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::hash::Hasher;
-
     use super::*;
     use crate::Cyclic;
 
-    #[derive(Clone, Debug, Default)]
-    struct SimpleHashBuilder {}
+    #[test]
+    fn construction_and_capacity() {
+        let module1 = HashMapModule::<u32, Cyclic<5>>::new();
+        assert_eq!(module1.coefficient(&0), Cyclic::from(0));
 
-    impl BuildHasher for SimpleHashBuilder {
-        type Hasher = SimpleHash;
-
-        fn build_hasher(&self) -> Self::Hasher {
-            SimpleHash { state: 0 }
-        }
-    }
-
-    struct SimpleHash {
-        state: u64,
-    }
-
-    impl Hasher for SimpleHash {
-        fn finish(&self) -> u64 {
-            self.state
-        }
-
-        fn write(&mut self, bytes: &[u8]) {
-            for byte in bytes {
-                self.state = self.state.wrapping_add(*byte as u64);
-            }
-        }
-    }
-
-    fn initialize_test_objects() -> (
-        HashMapModule<u32, Cyclic<5>>,
-        HashMapModule<(u16, u16), Cyclic<31>, SimpleHashBuilder>,
-    ) {
-        (
-            HashMapModule::<u32, Cyclic<5>>::new(),
-            HashMapModule::<(u16, u16), Cyclic<31>, SimpleHashBuilder>::with_capacity(20),
-        )
-    }
-
-    fn populate_test_objects(
-        rs_module: &mut HashMapModule<u32, Cyclic<5>>,
-        sh_module: &mut HashMapModule<(u16, u16), Cyclic<31>, SimpleHashBuilder>,
-    ) {
-        rs_module.insert_or_add(0, Cyclic::from(2));
-        rs_module.insert_or_add(10, Cyclic::from(0));
-        rs_module.insert_or_add(12, Cyclic::from(4));
-
-        sh_module.insert_or_add((13, 0), Cyclic::from(21));
-        sh_module.insert_or_add((2, 25), Cyclic::from(4));
-        sh_module.insert_or_add((17, 17), Cyclic::from(0));
+        let module2 = HashMapModule::<i32, Cyclic<7>>::with_capacity(100);
+        assert_eq!(module2.coefficient(&99), Cyclic::from(0));
     }
 
     #[test]
-    fn construction() {
-        let (_rs_module, _sh_module) = initialize_test_objects();
+    fn coefficient_access_and_mutation() {
+        let mut module = HashMapModule::<u32, Cyclic<5>>::new();
+
+        // Access non-existent returns zero
+        assert_eq!(module.coefficient(&1), Cyclic::from(0));
+
+        // Insert and access
+        module.insert_or_add(1, Cyclic::from(3));
+        assert_eq!(module.coefficient(&1), Cyclic::from(3));
+
+        // Add to existing
+        module.insert_or_add(1, Cyclic::from(2));
+        assert_eq!(module.coefficient(&1), Cyclic::from(0)); // 3 + 2 = 0 (mod 5)
+
+        // Mutable access
+        *module.coefficient_mut(&2) = Cyclic::from(4);
+        assert_eq!(module.coefficient(&2), Cyclic::from(4));
+
+        // Remove
+        assert_eq!(module.remove(&2), Cyclic::from(4));
+        assert_eq!(module.remove(&2), Cyclic::from(0)); // Already removed
+
+        // Clear
+        module.insert_or_add(5, Cyclic::from(1));
+        module.clear();
+        assert_eq!(module.coefficient(&5), Cyclic::from(0));
     }
 
     #[test]
-    fn insertion_and_access() {
-        let (mut rs_module, mut sh_module) = initialize_test_objects();
-        populate_test_objects(&mut rs_module, &mut sh_module);
+    fn module_arithmetic() {
+        let module1 =
+            HashMapModule::<i32, Cyclic<7>>::from([(1, Cyclic::from(3)), (2, Cyclic::from(5))]);
+        let module2 = HashMapModule::from([(1, Cyclic::from(4)), (3, Cyclic::from(2))]);
 
-        assert_eq!(
-            rs_module,
-            HashMapModule::from([
-                (0, Cyclic::from(2)),
-                (10, Cyclic::from(0)),
-                (12, Cyclic::from(4)),
-                (20, Cyclic::from(0)), // not present
-            ])
-        );
-        assert_eq!(
-            sh_module,
-            HashMapModule::from([
-                ((13, 0), Cyclic::from(21)),
-                ((2, 25), Cyclic::from(4)),
-                ((17, 17), Cyclic::from(0)),
-                ((11, 0), Cyclic::from(0)), // not present
-            ])
-        );
+        // Addition
+        let sum = module1.clone() + module2.clone();
+        assert_eq!(sum.coefficient(&1), Cyclic::from(0)); // 3 + 4 = 0 (mod 7)
+        assert_eq!(sum.coefficient(&2), Cyclic::from(5));
+        assert_eq!(sum.coefficient(&3), Cyclic::from(2));
 
-        let old_rs_module = rs_module.clone();
-        let old_sh_module = sh_module.clone();
+        // Subtraction
+        let diff = module1.clone() - module2.clone();
+        assert_eq!(diff.coefficient(&1), Cyclic::from(6)); // 3 - 4 = -1 = 6 (mod 7)
+        assert_eq!(diff.coefficient(&2), Cyclic::from(5));
+        assert_eq!(diff.coefficient(&3), Cyclic::from(5)); // 0 - 2 = -2 = 5 (mod 7)
 
-        rs_module.insert_or_add(13, Cyclic::from(1)); // new
-        rs_module.insert_or_add(12, Cyclic::from(2)); // add to existing
-        sh_module.insert_or_add((8, 90), Cyclic::from(10)); // new
-        sh_module.insert_or_add((17, 17), Cyclic::from(18)); // add to existing
+        // AddAssign
+        let mut module3 = module1.clone();
+        module3 += module2.clone();
+        assert_eq!(module3, sum);
 
-        assert_ne!(rs_module, old_rs_module);
-        assert_ne!(sh_module, old_sh_module);
+        // SubAssign
+        let mut module4 = module1.clone();
+        module4 -= module2;
+        assert_eq!(module4, diff);
 
-        assert_eq!(
-            rs_module,
-            HashMapModule::from([
-                (0, Cyclic::from(2)),
-                (10, Cyclic::from(0)),
-                (12, Cyclic::from(1)),
-                (20, Cyclic::from(0)), // not present
-                (13, Cyclic::from(1)),
-            ])
-        );
-        assert_eq!(
-            sh_module,
-            HashMapModule::from([
-                ((13, 0), Cyclic::from(21)),
-                ((2, 25), Cyclic::from(4)),
-                ((17, 17), Cyclic::from(18)),
-                ((11, 0), Cyclic::from(0)), // not present
-                ((8, 90), Cyclic::from(10)),
-            ])
-        );
-
-        assert_eq!(rs_module.remove(&10), Cyclic::from(0));
-        assert_eq!(rs_module.remove(&12), Cyclic::from(1));
-        assert_eq!(rs_module.remove(&12), Cyclic::from(0));
-        assert_eq!(sh_module.remove(&(11, 0)), Cyclic::from(0));
-        assert_eq!(sh_module.remove(&(13, 0)), Cyclic::from(21));
-        assert_eq!(sh_module.remove(&(13, 0)), Cyclic::from(0));
-
-        assert_eq!(
-            rs_module,
-            HashMapModule::from([
-                (0, Cyclic::from(2)),
-                (10, Cyclic::from(0)),
-                (12, Cyclic::from(0)),
-                (20, Cyclic::from(0)), // not present
-                (13, Cyclic::from(1)),
-            ])
-        );
-        assert_eq!(
-            sh_module,
-            HashMapModule::from([
-                ((13, 0), Cyclic::from(0)),
-                ((2, 25), Cyclic::from(4)),
-                ((17, 17), Cyclic::from(18)),
-                ((11, 0), Cyclic::from(0)), // not present
-                ((8, 90), Cyclic::from(10)),
-            ])
-        );
+        // Negation
+        let neg = -module1.clone();
+        assert_eq!(neg.coefficient(&1), Cyclic::from(4)); // -3 = 4 (mod 7)
+        assert_eq!(neg.coefficient(&2), Cyclic::from(2)); // -5 = 2 (mod 7)
     }
 
     #[test]
-    fn test_addition() {
-        let (mut rs_module, mut sh_module) = initialize_test_objects();
-        populate_test_objects(&mut rs_module, &mut sh_module);
-
-        let rs_result = rs_module.clone()
-            + HashMapModule::<u32, Cyclic<5>>::from([(0, Cyclic::from(1)), (10, Cyclic::from(2))]);
-        let sh_result = sh_module.clone()
-            + HashMapModule::<(u16, u16), Cyclic<31>, SimpleHashBuilder>::from([
-                ((13, 0), Cyclic::from(10)),
-                ((2, 25), Cyclic::from(5)),
-            ]);
-
-        assert_eq!(
-            rs_result,
-            HashMapModule::from([
-                (0, Cyclic::from(3)),
-                (10, Cyclic::from(2)),
-                (12, Cyclic::from(4)),
-                (20, Cyclic::from(0)),
-            ]),
-        );
-        assert_eq!(
-            sh_result,
-            HashMapModule::from([
-                ((13, 0), Cyclic::from(0)),
-                ((2, 25), Cyclic::from(9)),
-                ((17, 17), Cyclic::from(0)),
-                ((11, 0), Cyclic::from(0)),
-            ]),
-        );
-
-        rs_module +=
-            HashMapModule::<u32, Cyclic<5>>::from([(0, Cyclic::from(1)), (10, Cyclic::from(2))]);
-        sh_module += HashMapModule::<(u16, u16), Cyclic<31>, SimpleHashBuilder>::from([
-            ((13, 0), Cyclic::from(10)),
-            ((2, 25), Cyclic::from(5)),
-        ]);
-
-        assert_eq!(
-            rs_result,
-            HashMapModule::from([
-                (0, Cyclic::from(3)),
-                (10, Cyclic::from(2)),
-                (12, Cyclic::from(4)),
-                (20, Cyclic::from(0)),
-            ]),
-        );
-        assert_eq!(
-            sh_result,
-            HashMapModule::from([
-                ((13, 0), Cyclic::from(0)),
-                ((2, 25), Cyclic::from(9)),
-                ((17, 17), Cyclic::from(0)),
-                ((11, 0), Cyclic::from(0)),
-            ]),
-        );
-    }
-
-    #[test]
-    fn test_subtraction() {
-        let (mut rs_module, mut sh_module) = initialize_test_objects();
-        populate_test_objects(&mut rs_module, &mut sh_module);
-
-        let rs_result = rs_module.clone()
-            - HashMapModule::<u32, Cyclic<5>>::from([(0, Cyclic::from(1)), (10, Cyclic::from(2))]);
-        let sh_result = sh_module.clone()
-            - HashMapModule::<(u16, u16), Cyclic<31>, SimpleHashBuilder>::from([
-                ((13, 0), Cyclic::from(10)),
-                ((2, 25), Cyclic::from(5)),
-            ]);
-
-        assert_eq!(
-            rs_result,
-            HashMapModule::from([
-                (0, Cyclic::from(1)),
-                (10, Cyclic::from(3)),
-                (12, Cyclic::from(4)),
-                (20, Cyclic::from(0)),
-            ]),
-        );
-        assert_eq!(
-            sh_result,
-            HashMapModule::from([
-                ((13, 0), Cyclic::from(11)),
-                ((2, 25), Cyclic::from(30)),
-                ((17, 17), Cyclic::from(0)),
-                ((11, 0), Cyclic::from(0)),
-            ]),
-        );
-
-        rs_module -=
-            HashMapModule::<u32, Cyclic<5>>::from([(0, Cyclic::from(1)), (10, Cyclic::from(2))]);
-        sh_module -= HashMapModule::<(u16, u16), Cyclic<31>, SimpleHashBuilder>::from([
-            ((13, 0), Cyclic::from(10)),
-            ((2, 25), Cyclic::from(5)),
-        ]);
-
-        assert_eq!(
-            rs_result,
-            HashMapModule::from([
-                (0, Cyclic::from(1)),
-                (10, Cyclic::from(3)),
-                (12, Cyclic::from(4)),
-                (20, Cyclic::from(0)),
-            ]),
-        );
-        assert_eq!(
-            sh_result,
-            HashMapModule::from([
-                ((13, 0), Cyclic::from(11)),
-                ((2, 25), Cyclic::from(30)),
-                ((17, 17), Cyclic::from(0)),
-                ((11, 0), Cyclic::from(0)),
-            ]),
-        );
-    }
-
-    #[test]
-    fn test_scalar_multiplication() {
-        let mut module =
+    fn scalar_multiplication() {
+        let module =
             HashMapModule::<u32, Cyclic<5>>::from([(1, Cyclic::from(2)), (2, Cyclic::from(3))]);
 
-        // Multiplication by 1 should be no-op
-        let original = module.clone();
-        module = module.scalar_mul(Cyclic::one());
-        assert_eq!(module, original);
+        // Identity
+        assert_eq!(module.clone().scalar_mul(Cyclic::one()), module);
 
-        module = module.scalar_mul(Cyclic::from(2));
-        assert_eq!(module.coef(&1), Cyclic::from(4));
-        assert_eq!(module.coef(&2), Cyclic::from(1));
+        // General scalar
+        let scaled = module.clone().scalar_mul(Cyclic::from(2));
+        assert_eq!(scaled.coefficient(&1), Cyclic::from(4));
+        assert_eq!(scaled.coefficient(&2), Cyclic::from(1)); // 3 * 2 = 6 ≡ 1 (mod 5)
 
-        // Multiplication by 0 should clear
-        module = module.scalar_mul(Cyclic::from(0));
-        assert_eq!(module, HashMapModule::new());
+        // Zero clears
+        let zeroed = module.scalar_mul(Cyclic::zero());
+        assert_eq!(zeroed.coefficient(&1), Cyclic::from(0));
+        assert_eq!(zeroed.coefficient(&2), Cyclic::from(0));
     }
 
     #[test]
-    fn test_iter() {
+    fn equality_with_zeros() {
+        let module1 = HashMapModule::<u32, Cyclic<5>>::from([
+            (1, Cyclic::from(2)),
+            (2, Cyclic::from(0)), // Explicit zero
+        ]);
+        let module2 = HashMapModule::from([(1, Cyclic::from(2))]);
+
+        assert_eq!(module1, module2);
+    }
+
+    #[test]
+    fn iterator_filters_zeros() {
         let mut module = HashMapModule::<u32, Cyclic<7>>::from([
             (1, Cyclic::from(3)),
-            (2, Cyclic::from(0)), // Should be filtered out
+            (2, Cyclic::from(0)),
             (3, Cyclic::from(5)),
-            (4, Cyclic::from(0)), // Should be filtered out
         ]);
+        module.insert_or_add(4, Cyclic::from(0));
 
-        // Add a zero coefficient entry to test filtering
-        module.insert_or_add(5, Cyclic::from(0));
-
-        let mut collected: Vec<_> = module.iter().map(|(cell, coef)| (*cell, *coef)).collect();
+        let mut collected: Vec<_> = module
+            .iter()
+            .map(|(cell, coefficient)| (*cell, *coefficient))
+            .collect();
         collected.sort_by_key(|(cell, _)| *cell);
 
-        let expected = vec![(1, Cyclic::from(3)), (3, Cyclic::from(5))];
+        assert_eq!(collected, vec![(1, Cyclic::from(3)), (3, Cyclic::from(5))]);
 
-        assert_eq!(collected, expected);
+        // Empty module
+        let empty = HashMapModule::<u32, Cyclic<7>>::new();
+        assert_eq!(empty.iter().count(), 0);
+    }
 
-        // Test empty module
-        let empty_module = HashMapModule::<u32, Cyclic<7>>::new();
-        let empty_collected: Vec<_> = empty_module.iter().collect();
-        assert_eq!(empty_collected, vec![]);
+    #[test]
+    fn from_array_and_into_iter() {
+        let arr = [(1, Cyclic::<5>::from(2)), (3, Cyclic::from(4))];
+        let module: HashMapModule<i32, Cyclic<5>> = HashMapModule::from(arr);
+
+        assert_eq!(module.coefficient(&1), Cyclic::from(2));
+        assert_eq!(module.coefficient(&3), Cyclic::from(4));
+
+        let collected: Vec<_> = module.into_iter().collect();
+        assert_eq!(collected.len(), 2);
+    }
+
+    #[test]
+    fn display_formatting() {
+        let empty = HashMapModule::<u32, Cyclic<5>>::new();
+        assert_eq!(empty.to_string(), "0");
+
+        let single: HashMapModule<u32, Cyclic<5>> =
+            HashMapModule::from([(2, Cyclic::<5>::from(1))]);
+        assert_eq!(single.to_string(), "2");
+
+        let with_coef: HashMapModule<u32, Cyclic<5>> =
+            HashMapModule::from([(3, Cyclic::<5>::from(2))]);
+        assert_eq!(with_coef.to_string(), "2 (mod 5)*3");
     }
 }

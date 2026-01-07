@@ -2,16 +2,76 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+//! Explicit cell complex with vector-based storage.
+//!
+//! This module provides [`CellComplex`], a general-purpose cell complex where
+//! boundaries and coboundaries are stored explicitly. It is typically used as
+//! the output of Morse reduction algorithms.
+
+use std::ops::Range;
+
 use crate::{ComplexLike, Grader, ModuleLike};
 
-/// A simple concrete implementation of a cell complex with vector-based
+/// A concrete implementation of a cell complex with explicit vector-based
 /// storage.
 ///
 /// `CellComplex` represents a finite cell complex where cells are identified by
 /// `u32` indices. Each cell has associated dimensional information, grade,
 /// boundary, and coboundary data explicitly stored in parallel vectors for
-/// efficient access. However, there needs to be few enough cells that the
-/// memory overhead of storing these vectors is acceptable.
+/// efficient access.
+///
+/// # When to Use
+///
+/// Use `CellComplex` when:
+/// - The complex has a moderate number of cells (memory overhead is acceptable)
+/// - You need explicit storage of all boundary and coboundary relationships
+/// - The complex is the output of a Morse reduction or other algorithm
+///
+/// For large high-dimensional cubical complexes, consider [`CubicalComplex`]
+/// which computes boundaries on-the-fly.
+///
+/// # Type Parameters
+///
+/// - `M`: Module type for representing linear combinations of cells. Must
+///   implement [`ModuleLike`] with `Cell = u32`.
+///
+/// # Examples
+///
+/// Creating a line segment (two vertices connected by one edge):
+///
+/// ```rust
+/// use chomp3rs::{
+///     CellComplex, ComplexLike, Cyclic, HashMapModule, ModuleLike, RingLike,
+/// };
+///
+/// // Cells: 0 = vertex, 1 = vertex, 2 = edge
+/// let cell_dimensions = vec![0, 0, 1];
+/// let grades = vec![0, 0, 0];
+///
+/// let mut boundaries: Vec<HashMapModule<u32, Cyclic<5>>> =
+///     vec![HashMapModule::new(); 3];
+/// // Edge boundary: vertex1 - vertex0
+/// boundaries[2].insert_or_add(1, Cyclic::<5>::one());
+/// boundaries[2].insert_or_add(0, -Cyclic::<5>::one());
+///
+/// let mut coboundaries: Vec<HashMapModule<u32, Cyclic<5>>> =
+///     vec![HashMapModule::new(); 3];
+/// coboundaries[0].insert_or_add(2, -Cyclic::<5>::one());
+/// coboundaries[1].insert_or_add(2, Cyclic::<5>::one());
+///
+/// let complex =
+///     CellComplex::new(cell_dimensions, grades, boundaries, coboundaries);
+///
+/// assert_eq!(complex.dimension(), 1);
+/// assert_eq!(complex.cell_count(), 3);
+/// assert_eq!(complex.cell_dimension(&2), 1);
+///
+/// let edge_boundary = complex.cell_boundary(&2);
+/// let boundary_of_boundary = complex.boundary(&edge_boundary);
+/// assert_eq!(boundary_of_boundary, HashMapModule::new());
+/// ```
+///
+/// [`CubicalComplex`]: crate::CubicalComplex
 #[derive(Debug, Clone)]
 pub struct CellComplex<M>
 where
@@ -24,25 +84,6 @@ where
     coboundaries: Vec<M>,
 }
 
-pub struct CellRangeIterator {
-    next: u32,
-    end: u32,
-}
-
-impl Iterator for CellRangeIterator {
-    type Item = u32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.next < self.end {
-            let current = self.next;
-            self.next += 1;
-            Some(current)
-        } else {
-            None
-        }
-    }
-}
-
 impl<M> CellComplex<M>
 where
     M: ModuleLike<Cell = u32>,
@@ -51,6 +92,11 @@ where
     /// must have the same length, which represents the number of cells in
     /// the complex. The dimension of the cell complex is determined by the
     /// maximum dimension of the cells, or 0 if there are no cells.
+    ///
+    /// # Panics
+    ///
+    /// If all four input vectors are not the same length.
+    #[must_use]
     pub fn new(
         cell_dimensions: Vec<u32>,
         grades: Vec<u32>,
@@ -71,7 +117,8 @@ where
         }
     }
 
-    /// The number of cells in the complex.
+    /// Returns the number of cells in the complex.
+    #[must_use]
     pub fn cell_count(&self) -> u32 {
         self.cell_dimensions.len() as u32
     }
@@ -82,15 +129,12 @@ where
     M: ModuleLike<Cell = u32>,
 {
     type Cell = u32;
-    type CellIterator = CellRangeIterator;
+    type CellIterator = Range<u32>;
     type Module = M;
     type Ring = M::Ring;
 
-    fn cell_iter(&self) -> Self::CellIterator {
-        CellRangeIterator {
-            next: 0,
-            end: self.grades.len() as u32,
-        }
+    fn iter(&self) -> Range<u32> {
+        0..self.grades.len() as u32
     }
 
     fn cell_boundary_if(&self, cell: &u32, predicate: impl Fn(&u32) -> bool) -> M {
@@ -193,7 +237,7 @@ mod tests {
         let boundaries = vec![HashMapModule::new(); 3];
         let coboundaries = vec![HashMapModule::new(); 3];
 
-        CellComplex::<HashMapModule<u32, Cyclic<5>>>::new(
+        let _ = CellComplex::<HashMapModule<u32, Cyclic<5>>>::new(
             cell_dimensions,
             grades,
             boundaries,
@@ -219,10 +263,10 @@ mod tests {
 
         // Check boundary of edge
         let edge_boundary = complex.cell_boundary(&2);
-        assert_eq!(edge_boundary.coef(&0), -Cyclic::one());
-        assert_eq!(edge_boundary.coef(&1), Cyclic::one());
+        assert_eq!(edge_boundary.coefficient(&0), -Cyclic::one());
+        assert_eq!(edge_boundary.coefficient(&1), Cyclic::one());
 
-        let cells: Vec<_> = complex.cell_iter().collect();
+        let cells: Vec<_> = complex.iter().collect();
         assert_eq!(cells, vec![0, 1, 2]);
     }
 
@@ -233,7 +277,7 @@ mod tests {
         assert_eq!(complex.cell_count(), 7);
 
         // Verify we have all expected cells
-        let cells: Vec<_> = complex.cell_iter().collect();
+        let cells: Vec<_> = complex.iter().collect();
         assert_eq!(cells, vec![0, 1, 2, 3, 4, 5, 6]);
 
         // Check dimensions of different cell types
@@ -247,10 +291,10 @@ mod tests {
     }
 
     #[test]
-    fn test_cell_iterator_completeness() {
+    fn cell_iterator_completeness() {
         let complex = create_graded_triangle_complex();
 
-        let cells: Vec<_> = complex.cell_iter().collect();
+        let cells: Vec<_> = complex.iter().collect();
 
         // Should iterate through all cells exactly once
         assert_eq!(cells.len(), 7);
