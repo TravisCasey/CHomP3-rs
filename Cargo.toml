@@ -19,6 +19,10 @@ serde = ["dep:serde"]
 name = "top_cube_sn"
 harness = false
 
+[[bench]]
+name = "rotated_torus"
+harness = false
+
 [profile.bench]
 debug = true
 

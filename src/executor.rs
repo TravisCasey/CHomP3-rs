@@ -9,6 +9,8 @@
 //! algorithm code from the execution backend, which may be sequential or
 //! distributed/parallel.
 
+use crate::logging::ProgressTracker;
+
 /// Base executor trait for running computations over work items.
 ///
 /// This trait defines the core execution interface. Implementations may
@@ -48,21 +50,22 @@ pub trait Executor {
     /// let mut executor = SequentialExecutor;
     ///
     /// // One-to-one: each input produces exactly one output
-    /// let doubled = executor.execute(1..=3, |x| Some(x * 2));
+    /// let doubled = executor.execute("Doubling", 1..4, |x| Some(x * 2));
     /// assert_eq!(doubled, vec![2, 4, 6]);
     ///
     /// // One-to-many: each input produces multiple outputs
-    /// let expanded = executor.execute(1..=3, |x| vec![x, x * 10]);
+    /// let expanded = executor.execute("Expanding", 1..4, |x| vec![x, x * 10]);
     /// assert_eq!(expanded, vec![1, 10, 2, 20, 3, 30]);
     ///
     /// // Filtering: some inputs produce no output
-    /// let evens =
-    ///     executor.execute(1..=5, |x| if x % 2 == 0 { Some(x) } else { None });
+    /// let evens = executor.execute("Filtering", 1..6, |x| {
+    ///     if x % 2 == 0 { Some(x) } else { None }
+    /// });
     /// assert_eq!(evens, vec![2, 4]);
     /// ```
-    fn execute<I, O, R, F>(&mut self, work_items: I, compute: F) -> Vec<R>
+    fn execute<I, O, R, F>(&mut self, label: &'static str, work_items: I, compute: F) -> Vec<R>
     where
-        I: Iterator,
+        I: ExactSizeIterator,
         O: IntoIterator<Item = R>,
         F: Fn(I::Item) -> O;
 }
@@ -80,24 +83,34 @@ pub trait Executor {
 /// let mut executor = SequentialExecutor;
 ///
 /// // One-to-one mapping
-/// let doubled = executor.execute(1..=3, |x| Some(x * 2));
+/// let doubled = executor.execute("Doubling", 1..4, |x| Some(x * 2));
 /// assert_eq!(doubled, vec![2, 4, 6]);
 ///
 /// // One-to-many expansion
-/// let pairs = executor.execute(1..=2, |x| vec![x, x * 10]);
+/// let pairs = executor.execute("Expanding", 1..3, |x| vec![x, x * 10]);
 /// assert_eq!(pairs, vec![1, 10, 2, 20]);
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SequentialExecutor;
 
 impl Executor for SequentialExecutor {
-    fn execute<I, O, R, F>(&mut self, work_items: I, compute: F) -> Vec<R>
+    fn execute<I, O, R, F>(&mut self, label: &'static str, work_items: I, compute: F) -> Vec<R>
     where
-        I: Iterator,
+        I: ExactSizeIterator,
         O: IntoIterator<Item = R>,
         F: Fn(I::Item) -> O,
     {
-        work_items.flat_map(compute).collect()
+        let mut results = Vec::new();
+        let mut progress =
+            ProgressTracker::new(format!("{label} (SequentialExecutor)"), work_items.len());
+
+        for item in work_items {
+            results.extend(compute(item));
+            progress.increment();
+        }
+
+        progress.finish();
+        results
     }
 }
 
@@ -124,9 +137,14 @@ pub trait DistributedExecutor: Executor {
     /// This method has the same semantics as [`Executor::execute`], but
     /// requires that work items and output collections are serializable
     /// for inter-process communication.
-    fn execute_distributed<I, O, R, F>(&mut self, work_items: I, compute: F) -> Vec<R>
+    fn execute_distributed<I, O, R, F>(
+        &mut self,
+        label: &'static str,
+        work_items: I,
+        compute: F,
+    ) -> Vec<R>
     where
-        I: Iterator,
+        I: ExactSizeIterator,
         I::Item: serde::Serialize + serde::de::DeserializeOwned,
         O: IntoIterator<Item = R> + serde::Serialize + serde::de::DeserializeOwned,
         F: Fn(I::Item) -> O;
@@ -147,35 +165,39 @@ mod tests {
     #[test]
     fn sequential_one_to_one() {
         let mut executor = SequentialExecutor;
-        let results = executor.execute(1..=5, |x| Some(x * 2));
+        let results = executor.execute("test", 1i16..=5, |x| Some(x * 2));
         assert_eq!(results, vec![2, 4, 6, 8, 10]);
     }
 
     #[test]
     fn sequential_one_to_many() {
         let mut executor = SequentialExecutor;
-        let results = executor.execute(1..=3, |x| vec![x, x * 10, x * 100]);
+        let results = executor.execute("test", 1i16..=3, |x| vec![x, x * 10, x * 100]);
         assert_eq!(results, vec![1, 10, 100, 2, 20, 200, 3, 30, 300]);
     }
 
     #[test]
     fn sequential_filtering() {
         let mut executor = SequentialExecutor;
-        let results = executor.execute(1..=6, |x| if x % 2 == 0 { Some(x) } else { None });
+        let results = executor.execute(
+            "test",
+            1i16..=6,
+            |x| if x % 2 == 0 { Some(x) } else { None },
+        );
         assert_eq!(results, vec![2, 4, 6]);
     }
 
     #[test]
     fn sequential_empty_input() {
         let mut executor = SequentialExecutor;
-        let results = executor.execute(std::iter::empty::<i32>(), |x| Some(x * 2));
+        let results = executor.execute("test", std::iter::empty::<i32>(), |x| Some(x * 2));
         assert!(results.is_empty());
     }
 
     #[test]
     fn sequential_all_empty_outputs() {
         let mut executor = SequentialExecutor;
-        let results: Vec<i32> = executor.execute(1..=5, |_| Vec::new());
+        let results: Vec<i32> = executor.execute("test", 1i16..=5, |_| Vec::new());
         assert!(results.is_empty());
     }
 
@@ -192,7 +214,7 @@ mod tests {
         // Before execution, nothing consumed
         assert_eq!(counter.get(), 0);
 
-        let results = executor.execute(work, |x| Some(x * 2));
+        let results = executor.execute("test", work, |x| Some(x * 2));
 
         // After execution, all items consumed
         assert_eq!(counter.get(), 5);

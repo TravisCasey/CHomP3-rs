@@ -62,3 +62,5 @@ deserialization
 filtrations
 hashable
 serde
+bitmasks
+

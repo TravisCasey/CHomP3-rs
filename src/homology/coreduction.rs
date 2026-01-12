@@ -15,9 +15,11 @@
 
 use std::{collections::HashMap, hash::Hash, marker::PhantomData, mem::take};
 
+use tracing::{debug, info, trace};
+
 use crate::{
     CellMatch, ComplexLike, HashMapModule, ModuleLike, MorseMatching, RingLike,
-    homology::linked_list::LinkedList,
+    homology::linked_list::LinkedList, logging::ProgressTracker,
 };
 
 /// A general-purpose acyclic partial matching based on coreduction.
@@ -252,7 +254,7 @@ where
     C: ComplexLike,
     C::Cell: Hash,
 {
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_lines)]
     fn compute_matching(
         complex: &C,
     ) -> (
@@ -269,11 +271,15 @@ where
         }
         let cell_count = indices.len();
 
+        info!("Coreduction: beginning matching on a complex of {cell_count} cells");
+
         // The CoreductionNode class stores a (contiguous) linked list of faces
         // and cofaces as well as the actual cell.
+        //
         // We use a linked list so items can be removed in constant time (with
         // a known index of the item). The removed items are connections to
         // cells that have been excised.
+        //
         // If the cell is a leaf (no faces remaining), it is stored in the
         // `leaves` linked list; `leaf_index` is its index in `leaves`, if it is
         // present. Should the cell be excised as a coreduction pair, this
@@ -288,6 +294,8 @@ where
                 cell,
             });
         }
+
+        debug!("Coreduction: node list created");
 
         let mut matching = Self {
             critical_cells: Vec::new(),
@@ -304,7 +312,12 @@ where
         // It is possible that the paired cell to a cell in this iterator has
         // already been excised; thus, we check that it still has exactly one
         // face.
-        for upper_index in matching.initialize_hasse(complex) {
+        let initial_pairs = matching.initialize_hasse(complex);
+        let initial_pair_count = initial_pairs.len();
+        debug!("Coreduction: found {initial_pair_count} initial coreduction pairs");
+
+        let mut initial_matched = 0usize;
+        for upper_index in initial_pairs {
             debug_assert!(
                 matching.nodes[upper_index].faces.len() <= 1,
                 "initial coreduction pair with greater than one face"
@@ -312,17 +325,26 @@ where
 
             if matching.nodes[upper_index].faces.len() == 1 {
                 matching.match_pair(upper_index);
+                initial_matched += 1;
             }
         }
+        debug!("Coreduction: matched {initial_matched} of {initial_pair_count} initial pairs");
 
+        let mut leaves_processed = 0usize;
+        let mut progress = ProgressTracker::new("Coreduction", cell_count).with_interval(10);
         while let Some(node_index) = matching.leaves.pop_front() {
             debug_assert!(
                 matching.nodes[node_index].faces.is_empty(),
                 "cell in leaves list with nonzero number of faces"
             );
 
+            trace!("Coreduction: excising leaf at node index {node_index}");
             matching.excise_leaf(node_index);
+            leaves_processed += 1;
+            progress.set(matching.matches.len());
         }
+        progress.finish();
+        debug!("Coreduction: processed {leaves_processed} leaves during main loop");
 
         // Check that all cells are matched, and that their classification is
         // consistent between `matching.critical_cells` and `matching.matches`
@@ -382,6 +404,13 @@ where
             }
         }
 
+        let critical_count = matching.critical_cells.len();
+        let matched_pairs = (matching.matches.len() - critical_count) / 2;
+        info!(
+            "Coreduction: matching complete: {critical_count} critical cells, {matched_pairs} \
+             matched pairs"
+        );
+
         (matching.critical_cells, matching.matches)
     }
 
@@ -433,6 +462,10 @@ where
             .peek_front()
             .expect("Attempting to match leaf instead of coreduction pair");
         if !self.faces[upper_face_index].incidence.is_invertible() {
+            trace!(
+                "Coreduction: skipping pair at node {upper_index}: incidence coefficient is not \
+                 invertible"
+            );
             return;
         }
 

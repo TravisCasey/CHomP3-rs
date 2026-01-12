@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Subgrid matching utilities for cubical complexes.
 //!
 //! This module provides types for subdividing and matching orthant grids in
@@ -6,551 +10,15 @@
 //!
 //! [`TopCubicalMatching`]: super::TopCubicalMatching
 
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+mod matching;
+mod peaks;
+mod subdivision;
 
-use std::{
-    collections::HashSet,
-    fmt::{Display, Formatter, Result},
-    iter::zip,
-};
-
-use itertools::Itertools;
+pub use matching::OrthantMatching;
+use peaks::PeakFinder;
+pub use subdivision::GridSubdivision;
 
 use crate::{Cube, CubicalComplex, Grader, Orthant, OrthantIterator, TopCubeGrader};
-
-/// Represents the matching structure for cells within an orthant.
-///
-/// This enum describes how cells in a suborthant are matched:
-///
-/// - `Branch`: The suborthant is subdivided into further suborthants, each with
-///   their own matching.
-/// - `Leaf`: All cells in the interval between `lower_extent` and the implicit
-///   upper extent are matched along a single axis.
-/// - `Critical`: The suborthant contains a single critical cell.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum OrthantMatching {
-    /// A branch node that subdivides the orthant into multiple suborthants.
-    Branch {
-        /// Extent of the maximal cell in this suborthant.
-        upper_extent: u32,
-        /// Upper extent of the first suborthant.
-        prime_extent: u32,
-        /// Matching structures for each suborthant.
-        suborthant_matchings: Vec<OrthantMatching>,
-    },
-    /// A leaf node where all cells match along a single axis.
-    Leaf {
-        /// Extent of the minimal cell in the matched interval.
-        lower_extent: u32,
-        /// The axis along which cells are matched.
-        match_axis: u32,
-    },
-    /// A critical cell (Ace) that is not matched to any other cell.
-    Critical {
-        /// The dual orthant of the critical cell.
-        ace_dual_orthant: Orthant,
-        /// Extent of the critical cell.
-        ace_extent: u32,
-    },
-}
-
-impl OrthantMatching {
-    /// Computes the match axis of a suborthant with upper extent `upper` and
-    /// lower extent `lower`.
-    ///
-    /// This is the first bit position (from the least bit) that is set in
-    /// `upper` but not in `lower`.
-    #[must_use]
-    pub fn construct_leaf(upper: u32, lower: u32) -> Self {
-        debug_assert_eq!(
-            upper & lower,
-            lower,
-            "attempted to construct a Leaf OrthantMatching from a lower cell which is not a face \
-             of the upper cell"
-        );
-        debug_assert_ne!(
-            upper, lower,
-            "attempted to construct a Leaf OrthantMatching from a single cell, which should be a \
-             Critical OrthantMatching"
-        );
-
-        // bit magic - trust
-        Self::Leaf {
-            lower_extent: lower,
-            match_axis: ((upper ^ lower) & ((u32::MAX - upper) + lower + 1)).ilog2(),
-        }
-    }
-
-    fn display_with_indent(&self, f: &mut Formatter<'_>, indent: usize) -> Result {
-        write!(f, "{}", " ".repeat(indent))?;
-        match self {
-            Self::Branch {
-                upper_extent,
-                prime_extent,
-                suborthant_matchings,
-            } => {
-                writeln!(
-                    f,
-                    "Branch {{ upper_extent: {upper_extent:b}, prime_extent: {prime_extent:b}, \
-                     suborthant_matchings: ["
-                )?;
-                for matching in suborthant_matchings {
-                    matching.display_with_indent(f, indent + 4)?;
-                }
-                writeln!(f, "{}] }}", " ".repeat(indent))
-            },
-            Self::Leaf {
-                lower_extent,
-                match_axis,
-            } => writeln!(
-                f,
-                "Leaf {{ lower_extent: {lower_extent:b}, match_axis: {match_axis} }}"
-            ),
-            Self::Critical {
-                ace_dual_orthant,
-                ace_extent,
-            } => writeln!(
-                f,
-                "Critical {{ ace_dual_orthant: {ace_dual_orthant}, ace_extent: {ace_extent:b} }}"
-            ),
-        }
-    }
-}
-
-impl Display for OrthantMatching {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.display_with_indent(f, 0)
-    }
-}
-
-/// A utility type for subdividing a rectangular grid of `Orthant` objects into
-/// smaller aligned subgrids.
-///
-/// Given a rectangular grid defined by minimum and maximum orthants
-/// (inclusive), this type partitions it into smaller rectangular subgrids of a
-/// specified size. Subgrids are aligned to the minimum orthant, and those at
-/// the boundary may be truncated to fit within the original grid.
-///
-/// # Nonempty Subgrids
-///
-/// This type supports tracking a list of "active" orthants provided at
-/// construction time. A subgrid is considered "nonempty" if at least one of
-/// these orthants either:
-/// 1. Is contained within the subgrid bounds, or
-/// 2. Is at most one coordinate less than some orthant in the subgrid along
-///    each axis.
-///
-/// The second condition means that for a subgrid with bounds `[min, max]` and
-/// an active orthant `L`, the subgrid is nonempty if for all coordinates `i`:
-/// `min[i] - 1 <= L[i] <= max[i]`.
-///
-/// Nonempty subgrids are computed at construction time and stored for efficient
-/// iteration.
-#[derive(Clone, Debug)]
-pub struct GridSubdivision {
-    minimum_orthant: Orthant,
-    maximum_orthant: Orthant,
-    subgrid_shape: Vec<i16>,
-    nonempty_subgrids: Vec<(Orthant, Orthant)>,
-}
-
-impl GridSubdivision {
-    /// Creates a new grid subdivision of the rectangular grid between the given
-    /// minimum and maximum orthants (inclusive).
-    ///
-    /// # Panics
-    ///
-    /// If the dimensions don't match or if any subgrid size is non-positive.
-    #[must_use]
-    pub fn new(
-        minimum_orthant: Orthant,
-        maximum_orthant: Orthant,
-        subgrid_shape: Option<Vec<i16>>,
-        orthants: Option<Vec<Orthant>>,
-    ) -> Self {
-        let dim = minimum_orthant.ambient_dimension() as usize;
-        // Default subgrid shape is to process one orthant at a time.
-        let subgrid_shape =
-            subgrid_shape.unwrap_or(vec![1; minimum_orthant.ambient_dimension() as usize]);
-
-        // Input validation. This is only run once, or at most once per process
-        // when run in parallel, so this does not incur significant computational
-        // cost.
-        assert_eq!(
-            minimum_orthant.ambient_dimension(),
-            maximum_orthant.ambient_dimension(),
-            "minimum and maximum orthants must have the same dimension"
-        );
-        assert_eq!(
-            minimum_orthant.ambient_dimension() as usize,
-            subgrid_shape.len(),
-            "subgrid shape must have exactly as many entries as the ambient dimension"
-        );
-        assert!(
-            subgrid_shape.iter().all(|&s| s > 0),
-            "subgrid shape must only contain positive entries"
-        );
-        for (i, (&min_coord, &max_coord)) in minimum_orthant
-            .iter()
-            .zip(maximum_orthant.iter())
-            .enumerate()
-        {
-            assert!(
-                min_coord <= max_coord,
-                "minimum orthant coordinate {min_coord} exceeds maximum at axis {i}"
-            );
-        }
-
-        if orthants.is_none() {
-            let mut subdivision = Self {
-                minimum_orthant,
-                maximum_orthant,
-                subgrid_shape,
-                nonempty_subgrids: Vec::new(),
-            };
-            let nonempty_subgrids = SubgridIterator::new(&subdivision).collect();
-            subdivision.nonempty_subgrids = nonempty_subgrids;
-            return subdivision;
-        }
-
-        // Compute nonempty subgrids at construction by iterating over orthants
-        let mut min_subgrid_index = Vec::with_capacity(dim);
-        let mut next_subgrid = vec![false; dim];
-        let mut nonempty_subgrid_set: HashSet<Vec<i16>> = HashSet::new();
-        for orthant in orthants.unwrap() {
-            min_subgrid_index.clear();
-            next_subgrid.fill(false);
-            // Compute the range of subgrid indices along each axis
-            for axis in 0..dim {
-                if orthant[axis] < minimum_orthant[axis] || orthant[axis] > maximum_orthant[axis] {
-                    break;
-                }
-                let relative_coord = orthant[axis] - minimum_orthant[axis];
-                min_subgrid_index.push(relative_coord / subgrid_shape[axis]);
-                if (relative_coord + 1) % subgrid_shape[axis] == 0 {
-                    next_subgrid[axis] = true;
-                }
-            }
-            if min_subgrid_index.len() < dim {
-                continue;
-            }
-
-            nonempty_subgrid_set.extend(
-                min_subgrid_index
-                    .iter()
-                    .zip(next_subgrid.iter())
-                    .map(|(index, next)| *index..=(*index + i16::from(*next)))
-                    .multi_cartesian_product(),
-            );
-        }
-
-        // Convert the set to a vector of actual subgrid bounds
-        let nonempty_subgrids: Vec<(Orthant, Orthant)> = nonempty_subgrid_set
-            .into_iter()
-            .map(|indices| {
-                let subgrid_min: Orthant = (0..dim)
-                    .map(|axis| minimum_orthant[axis] + indices[axis] * subgrid_shape[axis])
-                    .collect();
-                let subgrid_max: Orthant = (0..dim)
-                    .map(|axis| {
-                        (subgrid_min[axis] + subgrid_shape[axis] - 1).min(maximum_orthant[axis])
-                    })
-                    .collect();
-                (subgrid_min, subgrid_max)
-            })
-            .collect();
-
-        Self {
-            minimum_orthant,
-            maximum_orthant,
-            subgrid_shape,
-            nonempty_subgrids,
-        }
-    }
-
-    /// Returns an iterator over nonempty subgrids as (minimum, maximum) orthant
-    /// pairs.
-    ///
-    /// A subgrid is nonempty if at least one orthant from the list provided at
-    /// construction satisfies either:
-    /// 1. The orthant is inside the subgrid, or
-    /// 2. The orthant is at most one coordinate less than some orthant in the
-    ///    subgrid along each axis.
-    ///
-    /// More precisely, for a subgrid with bounds `[min, max]` and a list
-    /// orthant `L`, the subgrid is nonempty if for all coordinates `i`:
-    /// `min[i] - 1 <= L[i] <= max[i]`.
-    ///
-    /// The nonempty subgrids are precomputed at construction time. Note that
-    /// the iteration order is not deterministic as it depends on the internal
-    /// `HashSet` used during construction.
-    #[must_use]
-    pub fn nonempty_subgrids(&self) -> impl ExactSizeIterator<Item = &(Orthant, Orthant)> {
-        self.nonempty_subgrids.iter()
-    }
-
-    /// Queries which subgrid contains the given orthant and returns the
-    /// (minimum, maximum) orthant pair defining the subgrid.
-    ///
-    /// # Panics
-    ///
-    /// If the ambient dimension of the orthant does not match that of the
-    /// orthants defining the grid.
-    #[must_use]
-    pub fn query_subgrid(&self, orthant: &Orthant) -> (Orthant, Orthant) {
-        assert_eq!(
-            orthant.ambient_dimension(),
-            self.minimum_orthant.ambient_dimension(),
-            "orthant dimension mismatch"
-        );
-
-        let dim = self.minimum_orthant.ambient_dimension() as usize;
-        let subgrid_min_orthant: Orthant = (0..dim)
-            .map(|axis| {
-                let subgrid_index =
-                    (orthant[axis] - self.minimum_orthant[axis]) / self.subgrid_shape[axis];
-                self.minimum_orthant[axis] + subgrid_index * self.subgrid_shape[axis]
-            })
-            .collect();
-        let subgrid_max_orthant: Orthant = (0..dim)
-            .map(|axis| {
-                (subgrid_min_orthant[axis] + self.subgrid_shape[axis] - 1)
-                    .min(self.maximum_orthant[axis])
-            })
-            .collect();
-
-        (subgrid_min_orthant, subgrid_max_orthant)
-    }
-}
-
-/// Iterator over subgrids in a `GridSubdivision`.
-struct SubgridIterator {
-    minimum_orthant: Orthant,
-    maximum_orthant: Orthant,
-    subgrid_shape: Vec<i16>,
-    current_indices: Vec<i16>,
-    num_subgrids_per_axis: Vec<i16>,
-    finished: bool,
-}
-
-impl SubgridIterator {
-    fn new(subdivision: &GridSubdivision) -> Self {
-        let dim = subdivision.minimum_orthant.ambient_dimension() as usize;
-        let num_subgrids_per_axis: Vec<i16> = (0..dim)
-            .map(|axis| {
-                let range =
-                    subdivision.maximum_orthant[axis] - subdivision.minimum_orthant[axis] + 1;
-                (range + subdivision.subgrid_shape[axis] - 1) / subdivision.subgrid_shape[axis]
-            })
-            .collect();
-
-        Self {
-            minimum_orthant: subdivision.minimum_orthant.clone(),
-            maximum_orthant: subdivision.maximum_orthant.clone(),
-            subgrid_shape: subdivision.subgrid_shape.clone(),
-            current_indices: vec![0; dim],
-            num_subgrids_per_axis,
-            finished: false,
-        }
-    }
-}
-
-impl Iterator for SubgridIterator {
-    type Item = (Orthant, Orthant);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
-            return None;
-        }
-        let dim = self.current_indices.len();
-
-        let subgrid_min_orthant: Orthant = (0..dim)
-            .map(|axis| {
-                self.minimum_orthant[axis] + self.current_indices[axis] * self.subgrid_shape[axis]
-            })
-            .collect();
-        let subgrid_max_orthant: Orthant = (0..dim)
-            .map(|axis| {
-                (subgrid_min_orthant[axis] + self.subgrid_shape[axis] - 1)
-                    .min(self.maximum_orthant[axis])
-            })
-            .collect();
-
-        // Advance to next subgrid
-        let mut axis = 0;
-        while axis < dim {
-            self.current_indices[axis] += 1;
-            if self.current_indices[axis] < self.num_subgrids_per_axis[axis] {
-                break;
-            }
-            self.current_indices[axis] = 0;
-            axis += 1;
-        }
-
-        if axis == dim {
-            self.finished = true;
-        }
-
-        Some((subgrid_min_orthant, subgrid_max_orthant))
-    }
-}
-
-/// Helper type to find the "peaks" of an Orthant - those cells which are of
-/// lesser grade than all of their cofaces. This implies that their dual orthant
-/// is of the same lesser grade, but each dual orthant of the cofaces of the
-/// cell are not.
-///
-/// The basic idea is to iterate down the orthant in a BFS manner until a cell
-/// with a dual orthant of lesser grade is found. All cells below that cell are
-/// then excluded, and iteration continues. These peaks are recorded and
-/// returned to match the subgrid.
-///
-/// Currently, the implementation only works for two grades - an upper and a
-/// lower. It is also highly recommended that the `minimum_grade` option in
-/// the `PeakFinder::new` method is set to the lower grade, else this will
-/// needlessly iterate over the entire orthant. The algorithm will eventually
-/// be expanded to cover more grades.
-struct PeakFinder {
-    cell_nodes: Vec<(OrthantWrapper, u32)>,
-    extent_to_node_index: Vec<Option<usize>>,
-    ambient_dimension: usize,
-    minimum_grade: Option<u32>,
-}
-
-impl PeakFinder {
-    /// If `minimum_grade` is not `None` and a cell of such minimum grade is
-    /// found, it is presumed that each of its faces must have the same grade.
-    fn new(ambient_dimension: u32, minimum_grade: Option<u32>) -> Self {
-        Self {
-            cell_nodes: Vec::with_capacity(1 << (ambient_dimension as usize)),
-            extent_to_node_index: vec![None; 1 << (ambient_dimension as usize)],
-            ambient_dimension: ambient_dimension as usize,
-            minimum_grade,
-        }
-    }
-
-    fn reset(&mut self) {
-        // This has a noticeable improvement over clear in profiling, due to it
-        // not dropping all entries.
-        unsafe { self.cell_nodes.set_len(0) };
-        self.extent_to_node_index.fill(None);
-    }
-
-    /// Excludes all faces of the last cell in iteration from further iteration.
-    /// This is achieved using a bitmask (the `u32` argument in the tuple of the
-    /// `cell_nodes` vector).
-    fn exclude_last(&mut self) {
-        let last_index = self.cell_nodes.len() - 1;
-        let extent = self.cell_nodes[last_index].0.extent;
-        self.cell_nodes[last_index].1 = 0;
-
-        // Inform all parents that flipping the bit to reach the latest cell is
-        // no longer allowed; this information is propagated to other children
-        // and updates their bitmasks accordingly.
-        let mut axis_flag = 1;
-        for _ in 0..self.ambient_dimension {
-            if extent & axis_flag == 0
-                && let Some(parent_index) = self.extent_to_node_index[(extent ^ axis_flag) as usize]
-            {
-                debug_assert_ne!(self.cell_nodes[parent_index].1 & axis_flag, 0);
-                self.cell_nodes[parent_index].1 ^= axis_flag;
-            }
-            axis_flag <<= 1;
-        }
-    }
-
-    /// Find the peaks of `base_orthant` and return their (extent, grade).
-    fn compute_peaks<G: Grader<Orthant> + Clone>(
-        &mut self,
-        base_orthant: OrthantWrapper,
-        axis_increments: &[usize],
-        grade_cache: &mut SubgridGradeCache<G>,
-    ) -> Vec<(u32, u32)> {
-        let base_grade = grade_cache.grade(&base_orthant);
-        if self.minimum_grade == Some(base_grade) {
-            return vec![(base_orthant.extent, base_grade)];
-        }
-
-        // Initialize fields for iteration
-        self.reset();
-        let mut peaks = Vec::new();
-        let base_extent = base_orthant.extent;
-        self.extent_to_node_index[base_extent as usize] = Some(0);
-        self.cell_nodes.push((base_orthant, base_extent));
-
-        // Iterate in breadth-first manner; cells may be iterated to multiple
-        // times by each of their parents. This allows for updating their
-        // bitmasks with all information (see `exclude_last` method).
-        let mut node_index = 0usize;
-        let mut axis;
-        while node_index < self.cell_nodes.len() {
-            axis = 0;
-            while axis < self.ambient_dimension {
-                let axis_flag = 1 << axis;
-
-                // Bit can be flipped to produce a child
-                if self.cell_nodes[node_index].1 & axis_flag != 0 {
-                    debug_assert_ne!(self.cell_nodes[node_index].0.extent & axis_flag, 0);
-                    let child_extent = self.cell_nodes[node_index].0.extent ^ axis_flag;
-
-                    // Child has already been iterated to; pass any information from the bitmask
-                    // and continue.
-                    if let Some(prev_node_index) = self.extent_to_node_index[child_extent as usize]
-                    {
-                        self.cell_nodes[prev_node_index].1 &= self.cell_nodes[node_index].1;
-
-                    // Otherwise, produce the new cell.
-                    } else {
-                        let last_index = self.cell_nodes.len();
-                        self.extent_to_node_index[child_extent as usize] = Some(last_index);
-                        self.cell_nodes.push(self.cell_nodes[node_index].clone());
-
-                        let (child_orthant, child_mask) = &mut self.cell_nodes[last_index];
-
-                        child_orthant.orthant[axis] -= 1;
-                        child_orthant.cache_index -= axis_increments[axis];
-                        child_orthant.extent ^= axis_flag;
-                        *child_mask ^= axis_flag;
-
-                        let child_grade = grade_cache.grade(child_orthant);
-
-                        if child_grade != base_grade {
-                            peaks.push((child_extent, child_grade));
-                            self.exclude_last();
-
-                            // Update siblings on following iterations
-                            axis = 0;
-                            continue;
-                        }
-                    }
-                }
-                axis += 1;
-            }
-            node_index += 1;
-        }
-        peaks
-    }
-}
-
-/// When matching the subgrid, we represent orthants in the subgrid in three
-/// ways for three different purposes, each corresponding to one of the fields
-/// of this type:
-/// 1. `orthant`: The `Orthant` object itself,
-/// 2. `cache_index`: The index of the orthant in the associated
-///    `SubgridGradeCache` object. This can be efficiently determined using the
-///    `Subgrid::axis_increments` field when incrementing/decrementing orthant
-///    axes,
-/// 3. `extent`: The extent (see perhaps, [`Cube::from_extent`]), but
-///    represented as bits set in an integer (`[false, true, true]` is
-///    equivalent to `0b110`).
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct OrthantWrapper {
-    orthant: Orthant,
-    cache_index: usize,
-    extent: u32,
-}
 
 /// A suborthant is an interval (in the face order) of cells within an orthant
 /// (the field `base_orthant`).
@@ -588,42 +56,6 @@ impl Suborthant {
     }
 }
 
-/// A basic contiguous cache that stores the results of queries to the given
-/// `grading_function` in an array of size `cache_size`.
-///
-/// The size of the cache is the number of orthants in the subgrid (including
-/// the extra orthants that are queried but not matched, see `Subgrid::new`).
-#[derive(Clone, Debug)]
-struct SubgridGradeCache<G>
-where
-    G: Grader<Orthant>,
-{
-    grading_function: G,
-    cache: Vec<Option<u32>>,
-}
-
-impl<G> SubgridGradeCache<G>
-where
-    G: Grader<Orthant>,
-{
-    fn new(grading_function: G, cache_size: usize) -> Self {
-        Self {
-            grading_function,
-            cache: vec![None; cache_size],
-        }
-    }
-
-    fn reset(&mut self, cache_size: usize) {
-        self.cache.resize(cache_size, None);
-        self.cache.fill(None);
-    }
-
-    fn grade(&mut self, orthant: &OrthantWrapper) -> u32 {
-        *self.cache[orthant.cache_index]
-            .get_or_insert_with(|| self.grading_function.grade(&orthant.orthant))
-    }
-}
-
 /// A rectangular grid of orthants between (all coordinates between, not
 /// lexicographically) `minimum_orthant` and `maximum_orthant`.
 ///
@@ -636,12 +68,9 @@ where
 {
     minimum_orthant: Orthant,
     maximum_orthant: Orthant,
-    axis_increments: Vec<usize>,
-    grade_cache: SubgridGradeCache<G>,
-    minimum_grade: Option<u32>,
     maximum_kept_grade: u32,
     maximum_kept_dimension: u32,
-    peak_finder: PeakFinder,
+    peak_finder: PeakFinder<G>,
 }
 
 impl<G> Subgrid<G>
@@ -662,12 +91,13 @@ where
         Self {
             minimum_orthant: Orthant::zeros(complex.ambient_dimension() as usize),
             maximum_orthant: Orthant::zeros(complex.ambient_dimension() as usize),
-            axis_increments: vec![1usize; complex.ambient_dimension() as usize],
-            grade_cache: SubgridGradeCache::new(complex.grader().orthant_grader().clone(), 0),
-            minimum_grade: complex.grader().min_grade(),
             maximum_kept_grade,
             maximum_kept_dimension,
-            peak_finder: PeakFinder::new(complex.ambient_dimension(), complex.grader().min_grade()),
+            peak_finder: PeakFinder::new(
+                complex.ambient_dimension(),
+                complex.grader().min_grade(),
+                complex.grader().orthant_grader().clone(),
+            ),
         }
     }
 
@@ -683,7 +113,13 @@ where
         self.maximum_kept_dimension = maximum_kept_dimension;
     }
 
-    fn prepare_subgrid(&mut self, minimum_orthant: Orthant, maximum_orthant: Orthant) {
+    /// Match each orthant in the subgrid, and return a vector of:
+    /// `(base orthant, vector of critical cells, match results)`.
+    pub fn match_subgrid(
+        &mut self,
+        minimum_orthant: Orthant,
+        maximum_orthant: Orthant,
+    ) -> Vec<(Orthant, Vec<Cube>, OrthantMatching)> {
         debug_assert_eq!(
             minimum_orthant.ambient_dimension(),
             maximum_orthant.ambient_dimension(),
@@ -692,50 +128,8 @@ where
 
         self.minimum_orthant = minimum_orthant;
         self.maximum_orthant = maximum_orthant;
-
-        // We only match orthants between `minimum_orthant` and `maximum_orthant`.
-        // However, this may require grades of orthants from 1 less than each minimum
-        // coordinate. Grades are thus cached for all orthants between
-        // `least_graded_orthant` and the maximum.
-        let least_graded_orthant: Orthant = self
-            .minimum_orthant
-            .iter()
-            .map(|coord| *coord - 1)
-            .collect();
-
-        // To move one orthant along an axis in `grade_cache`, increment current
-        // index by `axis_increments[axis]`.
-        for (axis, (lg_coord, max_coord)) in
-            zip(least_graded_orthant.iter(), self.maximum_orthant.iter())
-                .enumerate()
-                .skip(1)
-                .rev()
-        {
-            debug_assert!(
-                max_coord > lg_coord,
-                "maximum orthant does not exceed minimum orthant"
-            );
-            self.axis_increments[axis - 1] = self.axis_increments[axis]
-                * (*max_coord as isize - *lg_coord as isize + 1).cast_unsigned();
-        }
-        debug_assert!(
-            self.maximum_orthant[0] > least_graded_orthant[0],
-            "maximum orthant does not exceed minimum orthant"
-        );
-        let total_orthant_count = self.axis_increments[0]
-            * (self.maximum_orthant[0] as isize - least_graded_orthant[0] as isize + 1)
-                .cast_unsigned();
-        self.grade_cache.reset(total_orthant_count);
-    }
-
-    /// Match each orthant in the subgrid, and return a vector of:
-    /// `(base orthant, vector of critical cells, and match results)`.
-    pub fn match_subgrid(
-        &mut self,
-        minimum_orthant: Orthant,
-        maximum_orthant: Orthant,
-    ) -> Vec<(Orthant, Vec<Cube>, OrthantMatching)> {
-        self.prepare_subgrid(minimum_orthant, maximum_orthant);
+        self.peak_finder
+            .prepare(&self.minimum_orthant, &self.maximum_orthant);
 
         let mut base_critical_matching = Vec::new();
         for base_orthant in
@@ -748,28 +142,8 @@ where
     }
 
     fn match_orthant(&mut self, base_orthant: Orthant) -> (Vec<Cube>, OrthantMatching) {
-        // Determine cache indices from orthant object; see `OrthantWrapper` and
-        // `SubgridGradeCache` for more information.
         let ambient_dimension = base_orthant.ambient_dimension();
-        let mut base_cache_index = 0;
-        for (axis, inc) in self.axis_increments.iter().enumerate() {
-            base_cache_index += *inc
-                * (base_orthant[axis] as isize + 1 - self.minimum_orthant[axis] as isize)
-                    .cast_unsigned();
-        }
-
-        let base_orthant_wrapper = OrthantWrapper {
-            orthant: base_orthant.clone(),
-            cache_index: base_cache_index,
-            extent: (1 << ambient_dimension) - 1,
-        };
-        let base_grade = self.grade_cache.grade(&base_orthant_wrapper);
-
-        let peaks = self.peak_finder.compute_peaks(
-            base_orthant_wrapper,
-            &self.axis_increments,
-            &mut self.grade_cache,
-        );
+        let base_grade = self.peak_finder.compute_peaks(&base_orthant);
 
         let mut critical_cells = Vec::new();
         let mut suborthant = Suborthant {
@@ -779,22 +153,22 @@ where
             upper_grade: base_grade,
             lower_dimension: 0,
         };
-        let orthant_matching = self.match_suborthant(&peaks, &mut critical_cells, &mut suborthant);
+        let orthant_matching = self.match_suborthant(&mut critical_cells, &mut suborthant);
+
         (critical_cells, orthant_matching)
     }
 
     /// Match all cells in `suborthant`; append all critical cells found (that
     /// do not exceed the maximum kept grade or dimension) to `critical_cells`.
     fn match_suborthant(
-        &mut self,
-        peaks: &[(u32, u32)],
+        &self,
         critical_cells: &mut Vec<Cube>,
         suborthant: &mut Suborthant,
     ) -> OrthantMatching {
-        // If the suborthant has just one cell, it must be critical
+        // Single cell: must be critical
         if suborthant.lower_extent == suborthant.upper_extent {
-            // Do not record critical cells with grade or dimension exceeding
-            // the configured values.
+            // Discard the critical cell if grade or dimension exceeds the
+            // configurable limits
             if suborthant.upper_grade <= self.maximum_kept_grade
                 && suborthant.lower_dimension <= self.maximum_kept_dimension
             {
@@ -803,186 +177,78 @@ where
                     suborthant.lower_dual_orthant(),
                 ));
             }
+
             return OrthantMatching::Critical {
                 ace_dual_orthant: suborthant.lower_dual_orthant(),
                 ace_extent: suborthant.lower_extent,
             };
         }
 
-        // If all cells have the minimum grade or all exceed the maximum dimension,
-        // match without further analysis
-        if Some(suborthant.upper_grade) == self.minimum_grade
-            || suborthant.lower_dimension > self.maximum_kept_dimension
-        {
+        // If all cells exceed the critical cell dimension limit, declare all
+        // cells matched irrespective of grade; they do not matter.
+        if suborthant.lower_dimension > self.maximum_kept_dimension {
             return OrthantMatching::construct_leaf(
                 suborthant.upper_extent,
                 suborthant.lower_extent,
             );
         }
 
-        if let Some((peak_index, prime_extent, prime_grade)) =
-            peaks
-                .iter()
-                .enumerate()
-                .find_map(|(peak_index, (extent, grade))| {
-                    if extent & suborthant.lower_extent == suborthant.lower_extent {
-                        return Some((peak_index, extent & suborthant.upper_extent, *grade));
-                    }
-                    None
-                })
-        {
-            let original_upper_grade = suborthant.upper_grade;
-            let differing_axes = prime_extent ^ suborthant.upper_extent;
-            let remaining_peaks = peaks.split_at(peak_index + 1).1;
+        // Find prime peak; if none, all cells must have the same grade and
+        // can be trivially matched.
+        let Some((prime_extent, prime_grade)) = self.peak_finder.prime_peak(
+            suborthant.upper_extent,
+            suborthant.lower_extent,
+            suborthant.upper_grade,
+        ) else {
+            return OrthantMatching::construct_leaf(
+                suborthant.upper_extent,
+                suborthant.lower_extent,
+            );
+        };
 
-            // Match the prime suborthant (between the prime cell and the lowest cell of the
-            // current suborthant)
-            suborthant.upper_extent = prime_extent;
-            suborthant.upper_grade = prime_grade;
-            let mut suborthant_matchings = Vec::with_capacity(self.axis_increments.len());
-            suborthant_matchings.push(self.match_suborthant(
-                remaining_peaks,
-                critical_cells,
-                suborthant,
-            ));
+        // Branch: recurse on prime suborthant and siblings
+        let original_upper_extent = suborthant.upper_extent;
+        let original_upper_grade = suborthant.upper_grade;
+        let differing_axes = prime_extent ^ suborthant.upper_extent;
+        let axis_count = self.peak_finder.axis_increments().len();
 
-            // Match the remaining cells in the original suborthant by forming suborthants
-            // from the prime suborthant, and extent along each axis that the prime cell
-            // differs from the maximal cell (bits set in `differing_axes`).
-            suborthant.upper_grade = original_upper_grade;
-            suborthant.lower_dimension += 1;
-            let mut axis_flag = 1;
-            for _ in 0..self.axis_increments.len() {
-                if differing_axes & axis_flag != 0 {
-                    suborthant.upper_extent ^= axis_flag;
-                    suborthant.lower_extent ^= axis_flag;
+        // Match prime suborthant: [lower_extent, prime_extent]
+        suborthant.upper_extent = prime_extent;
+        suborthant.upper_grade = prime_grade;
+        let mut suborthant_matchings = Vec::with_capacity(axis_count);
+        suborthant_matchings.push(self.match_suborthant(critical_cells, suborthant));
 
-                    suborthant_matchings.push(self.match_suborthant(
-                        remaining_peaks,
-                        critical_cells,
-                        suborthant,
-                    ));
+        // Match sibling suborthants of the form:
+        // [lower_extent + a_i, prime_extent + a_0 + a_1 + ... + a_i],
+        // for `a_i` being the set bits (axes) in upper_extent - prime_extent
+        suborthant.upper_grade = original_upper_grade;
+        suborthant.lower_dimension += 1;
+        let mut axis_flag = 1;
+        for _ in 0..axis_count {
+            if differing_axes & axis_flag != 0 {
+                suborthant.upper_extent ^= axis_flag;
+                suborthant.lower_extent ^= axis_flag;
 
-                    suborthant.lower_extent ^= axis_flag;
-                }
-                axis_flag <<= 1;
+                suborthant_matchings.push(self.match_suborthant(critical_cells, suborthant));
+
+                suborthant.lower_extent ^= axis_flag;
             }
-            suborthant.lower_dimension -= 1;
-
-            return OrthantMatching::Branch {
-                upper_extent: suborthant.upper_extent,
-                prime_extent,
-                suborthant_matchings,
-            };
+            axis_flag <<= 1;
         }
+        suborthant.lower_dimension -= 1;
 
-        // All elements have the same grade, but there is more than one cell
-        // (so, not critical). Thus, all match.
-        OrthantMatching::construct_leaf(suborthant.upper_extent, suborthant.lower_extent)
+        OrthantMatching::Branch {
+            upper_extent: original_upper_extent,
+            prime_extent,
+            suborthant_matchings,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::{Cyclic, HashMapGrader, HashMapModule};
-
-    #[test]
-    fn grid_subdivision_basic() {
-        let subdivision = GridSubdivision::new(
-            Orthant::from([0, 0]),
-            Orthant::from([9, 9]),
-            Some(vec![5, 5]),
-            None,
-        );
-
-        let subgrids: Vec<_> = subdivision.nonempty_subgrids().collect();
-        assert_eq!(subgrids.len(), 4);
-
-        // Check first subgrid
-        assert_eq!(subgrids[0].0, Orthant::from([0, 0]));
-        assert_eq!(subgrids[0].1, Orthant::from([4, 4]));
-
-        // Check last subgrid
-        assert_eq!(subgrids[3].0, Orthant::from([5, 5]));
-        assert_eq!(subgrids[3].1, Orthant::from([9, 9]));
-    }
-
-    #[test]
-    fn grid_subdivision_query() {
-        let subdivision = GridSubdivision::new(
-            Orthant::from([0, 0]),
-            Orthant::from([9, 9]),
-            Some(vec![5, 5]),
-            Some(vec![]),
-        );
-
-        let (min, max) = subdivision.query_subgrid(&Orthant::from([3, 7]));
-        assert_eq!(min, Orthant::from([0, 5]));
-        assert_eq!(max, Orthant::from([4, 9]));
-    }
-
-    #[test]
-    fn nonempty_subgrids_orthant_inside() {
-        // Test case 1: Orthant is directly inside a subgrid
-        let subdivision = GridSubdivision::new(
-            Orthant::from([0, 0, 0]),
-            Orthant::from([9, 9, 9]),
-            Some(vec![5, 5, 5]),
-            Some(vec![Orthant::from([2, 3, 4])]),
-        );
-
-        let nonempty: Vec<_> = subdivision.nonempty_subgrids().cloned().collect();
-        // The orthant [2, 3, 4] is inside [0, 0, 0] to [4, 4, 4]
-        // It's also within range of [0, 0, 5], [4, 4, 9]
-        assert_eq!(nonempty.len(), 2);
-        assert!(nonempty.contains(&(Orthant::from([0, 0, 0]), Orthant::from([4, 4, 4]))));
-        assert!(nonempty.contains(&(Orthant::from([0, 0, 5]), Orthant::from([4, 4, 9]))));
-    }
-
-    #[test]
-    fn nonempty_subgrids_multiple_orthants() {
-        // Multiple orthants affecting different subgrids
-        let subdivision = GridSubdivision::new(
-            Orthant::from([0, 0]),
-            Orthant::from([9, 9]),
-            Some(vec![5, 5]),
-            Some(vec![
-                Orthant::from([2, 2]), // Inside [0,0] to [4,4]
-                Orthant::from([7, 7]), // Inside [5,5] to [9,9]
-            ]),
-        );
-
-        let nonempty: Vec<_> = subdivision.nonempty_subgrids().cloned().collect();
-        assert_eq!(nonempty.len(), 2);
-        assert!(nonempty.contains(&(Orthant::from([0, 0]), Orthant::from([4, 4]))));
-        assert!(nonempty.contains(&(Orthant::from([5, 5]), Orthant::from([9, 9]))));
-    }
-
-    #[test]
-    fn nonempty_subgrids_large_orthant_list() {
-        // Create a 20x20 grid with 5x5 subgrids (16 total subgrids)
-        let mut orthants = Vec::new();
-
-        // Add 100 orthants scattered throughout the grid
-        for i in 0..10 {
-            for j in 0..10 {
-                orthants.push(Orthant::from([i as i16 * 2, j as i16 * 2]));
-            }
-        }
-
-        let subdivision = GridSubdivision::new(
-            Orthant::from([0, 0]),
-            Orthant::from([19, 19]),
-            Some(vec![5, 5]),
-            Some(orthants),
-        );
-
-        let nonempty: Vec<_> = subdivision.nonempty_subgrids().cloned().collect();
-        // All 16 subgrids should be nonempty given the orthant distribution
-        assert_eq!(nonempty.len(), 16);
-    }
 
     #[test]
     fn match_cube_torus_complex_subgrid() {
@@ -995,6 +261,7 @@ mod tests {
             TopCubeGrader<HashMapGrader<Orthant>>,
         >::new(Orthant::from([0, 0, 0]), Orthant::from([1, 1, 1]), grader);
         let mut subgrid = Subgrid::new(&complex, u32::MAX, u32::MAX);
+
         let base_critical_matching =
             subgrid.match_subgrid(Orthant::from([0, 0, 0]), Orthant::from([1, 1, 1]));
 
@@ -1015,33 +282,34 @@ mod tests {
         assert_eq!(
             *critical_cells,
             vec![
-                Cube::from_extent(base_orthant.clone(), &[true, true, false]),
+                Cube::from_extent(base_orthant.clone(), &[false, true, true]),
                 Cube::from_extent(base_orthant.clone(), &[true, true, true])
             ]
         );
+
         let correct_matching = OrthantMatching::Branch {
             upper_extent: 0b111,
-            prime_extent: 0b110,
+            prime_extent: 0b011,
             suborthant_matchings: vec![
                 OrthantMatching::Leaf {
                     lower_extent: 0b000,
-                    match_axis: 1,
+                    match_axis: 0,
                 },
                 OrthantMatching::Branch {
                     upper_extent: 0b111,
                     prime_extent: 0b101,
                     suborthant_matchings: vec![
                         OrthantMatching::Leaf {
-                            lower_extent: 0b001,
-                            match_axis: 2,
+                            lower_extent: 0b100,
+                            match_axis: 0,
                         },
                         OrthantMatching::Branch {
                             upper_extent: 0b111,
-                            prime_extent: 0b011,
+                            prime_extent: 0b110,
                             suborthant_matchings: vec![
                                 OrthantMatching::Critical {
-                                    ace_dual_orthant: Orthant::from([1, 1, 0]),
-                                    ace_extent: 0b011,
+                                    ace_dual_orthant: Orthant::from([0, 1, 1]),
+                                    ace_extent: 0b110,
                                 },
                                 OrthantMatching::Critical {
                                     ace_dual_orthant: Orthant::from([1, 1, 1]),
@@ -1056,7 +324,8 @@ mod tests {
         assert_eq!(*orthant_matching, correct_matching);
     }
 
-    fn prepare_two_cube_subgrid() -> Subgrid<HashMapGrader<Orthant>> {
+    #[test]
+    fn match_two_cube_subgrid() {
         let grader = TopCubeGrader::new(
             HashMapGrader::uniform(
                 [Orthant::from([0, 0, 1, 1]), Orthant::from([1, 1, 0, 0])],
@@ -1074,80 +343,55 @@ mod tests {
             grader,
         );
         let mut subgrid = Subgrid::new(&complex, u32::MAX, u32::MAX);
-        subgrid.prepare_subgrid(Orthant::from([1, 1, 1, 1]), Orthant::from([1, 1, 1, 1]));
-        subgrid
-    }
-
-    #[test]
-    fn compute_peaks_two_cube_subgrid() {
-        let correct_peaks = vec![(0b1100, 0), (0b0011, 0)];
-        let mut subgrid = prepare_two_cube_subgrid();
-
-        let base_orthant = OrthantWrapper {
-            orthant: Orthant::from([1, 1, 1, 1]),
-            cache_index: 15,
-            extent: 0b1111,
-        };
-        let peaks = subgrid.peak_finder.compute_peaks(
-            base_orthant,
-            &subgrid.axis_increments,
-            &mut subgrid.grade_cache,
-        );
-
-        assert_eq!(peaks, correct_peaks);
-    }
-
-    #[test]
-    fn match_two_cube_subgrid() {
-        let mut subgrid = prepare_two_cube_subgrid();
         let base_critical_matching =
             subgrid.match_subgrid(Orthant::from([1, 1, 1, 1]), Orthant::from([1, 1, 1, 1]));
+
         let (base_orthant, critical_cells, orthant_matching) = &base_critical_matching[0];
         assert_eq!(*base_orthant, Orthant::from([1, 1, 1, 1]));
         assert_eq!(
             *critical_cells,
             vec![
-                Cube::from_extent(base_orthant.clone(), &[true, false, false, false]),
+                Cube::from_extent(base_orthant.clone(), &[false, false, true, false]),
                 Cube::from_extent(base_orthant.clone(), &[true, false, true, false]),
             ]
         );
         let correct_matching = OrthantMatching::Branch {
             upper_extent: 0b1111,
-            prime_extent: 0b1100,
+            prime_extent: 0b0011,
             suborthant_matchings: vec![
                 OrthantMatching::Leaf {
                     lower_extent: 0b0000,
-                    match_axis: 2,
+                    match_axis: 0,
                 },
                 OrthantMatching::Branch {
-                    upper_extent: 0b1101,
-                    prime_extent: 0b0001,
+                    upper_extent: 0b0111,
+                    prime_extent: 0b0100,
                     suborthant_matchings: vec![
                         OrthantMatching::Critical {
-                            ace_dual_orthant: Orthant::from([1, 0, 0, 0]),
-                            ace_extent: 0b0001,
+                            ace_dual_orthant: Orthant::from([0, 0, 1, 0]),
+                            ace_extent: 0b0100,
                         },
                         OrthantMatching::Critical {
                             ace_dual_orthant: Orthant::from([1, 0, 1, 0]),
                             ace_extent: 0b0101,
                         },
                         OrthantMatching::Leaf {
-                            lower_extent: 0b1001,
-                            match_axis: 2,
+                            lower_extent: 0b0110,
+                            match_axis: 0,
                         },
                     ],
                 },
                 OrthantMatching::Branch {
                     upper_extent: 0b1111,
-                    prime_extent: 0b0011,
+                    prime_extent: 0b1100,
                     suborthant_matchings: vec![
                         OrthantMatching::Leaf {
-                            lower_extent: 0b0010,
-                            match_axis: 0,
+                            lower_extent: 0b1000,
+                            match_axis: 2,
                         },
                         OrthantMatching::Leaf {
-                            lower_extent: 0b0110,
-                            match_axis: 0,
+                            lower_extent: 0b1001,
+                            match_axis: 2,
                         },
                         OrthantMatching::Leaf {
                             lower_extent: 0b1010,
@@ -1158,60 +402,5 @@ mod tests {
             ],
         };
         assert_eq!(*orthant_matching, correct_matching);
-    }
-
-    #[test]
-    #[allow(clippy::unreadable_literal)]
-    fn orthant_matching_axis_computation() {
-        let orthant_matching = OrthantMatching::construct_leaf(0b11111, 0b00000);
-        assert!(matches!(
-            orthant_matching,
-            OrthantMatching::Leaf { match_axis: 0, .. }
-        ));
-
-        let orthant_matching = OrthantMatching::construct_leaf(0b100100, 0b000000);
-        assert!(matches!(
-            orthant_matching,
-            OrthantMatching::Leaf { match_axis: 2, .. }
-        ));
-
-        let orthant_matching = OrthantMatching::construct_leaf(0b11111, 0b01111);
-        assert!(matches!(
-            orthant_matching,
-            OrthantMatching::Leaf { match_axis: 4, .. }
-        ));
-
-        let orthant_matching = OrthantMatching::construct_leaf(0b11011, 0b10011);
-        assert!(matches!(
-            orthant_matching,
-            OrthantMatching::Leaf { match_axis: 3, .. }
-        ));
-    }
-
-    #[test]
-    fn orthant_matching_display() {
-        let orthant_matching = OrthantMatching::Branch {
-            upper_extent: 0b1111,
-            prime_extent: 0b1101,
-            suborthant_matchings: vec![
-                OrthantMatching::Branch {
-                    upper_extent: 0b1101,
-                    prime_extent: 0b0001,
-                    suborthant_matchings: vec![OrthantMatching::Critical {
-                        ace_dual_orthant: Orthant::from([0, 1, -1, 2]),
-                        ace_extent: 0b0001,
-                    }],
-                },
-                OrthantMatching::construct_leaf(0b1111, 0b0010),
-            ],
-        };
-
-        assert_eq!(
-            orthant_matching.to_string(),
-            "Branch { upper_extent: 1111, prime_extent: 1101, suborthant_matchings: [\n    Branch \
-             { upper_extent: 1101, prime_extent: 1, suborthant_matchings: [\n        Critical { \
-             ace_dual_orthant: (0, 1, -1, 2), ace_extent: 1 }\n    ] }\n    Leaf { lower_extent: \
-             10, match_axis: 0 }\n] }\n"
-        );
     }
 }

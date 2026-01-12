@@ -23,8 +23,12 @@
 //!   complexes. Implies `serde`.
 
 #![warn(missing_docs)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::unreadable_literal
+)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 pub use algebra::{
@@ -34,7 +38,6 @@ pub use complexes::{
     CellComplex, ComplexLike, Cube, CubeIterator, CubicalComplex, Grader, HashMapGrader, Orthant,
     OrthantIterator, OrthantTrie, TopCubeGrader,
 };
-// temp subgrid, GridSubdivision, CubicalGradeintPropagator
 pub use homology::{
     CellMatch, CoreductionMatching, MorseMatching, TopCubicalMatching, TopCubicalMatchingBuilder,
 };
@@ -43,4 +46,5 @@ pub mod algebra;
 pub mod complexes;
 pub mod executor;
 pub mod homology;
+mod logging;
 pub mod prelude;

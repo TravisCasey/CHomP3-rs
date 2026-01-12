@@ -319,13 +319,13 @@ mod tests {
         let mut propagator = TopCubicalGradientPropagator::new(&complex);
 
         // Create a 1-dimensional critical cell
-        let edge = Cube::from_extent(Orthant::from([1, 1]), &[true, false]);
+        let edge = Cube::from_extent(Orthant::from([1, 1]), &[false, true]);
         let boundary = propagator.compute_gradient(&edge);
 
         // In this complex, the critical edge has nontrivial boundary
         let mut expected_boundary = HashMapModule::new();
-        expected_boundary.insert_or_add(Cube::vertex(Orthant::from([2, 1])), Cyclic::one());
-        expected_boundary.insert_or_add(Cube::vertex(Orthant::from([2, 3])), -Cyclic::one());
+        expected_boundary.insert_or_add(Cube::vertex(Orthant::from([2, 3])), Cyclic::one());
+        expected_boundary.insert_or_add(Cube::vertex(Orthant::from([2, 1])), -Cyclic::one());
         assert_eq!(boundary, expected_boundary);
     }
 }

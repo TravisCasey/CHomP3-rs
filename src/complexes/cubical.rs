@@ -72,7 +72,7 @@
 
 use std::{
     cmp::Ordering,
-    fmt::{self, Display, Formatter},
+    fmt::{self, Debug, Display, Formatter},
     hash::Hash,
     iter::{FromIterator, zip},
     marker::PhantomData,
@@ -99,7 +99,7 @@ mod iterators;
 /// The maximum ambient dimension of an `Orthant` (as well as that of [`Cube`]
 /// and [`CubicalComplex`] instances) is 32. The interface is otherwise
 /// similar to an array with size fixed after construction.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "mpi", derive(Equivalence))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Orthant {
@@ -256,6 +256,23 @@ impl From<&[i16]> for Orthant {
 impl From<&mut [i16]> for Orthant {
     fn from(slice: &mut [i16]) -> Self {
         Self::new(slice)
+    }
+}
+
+impl Debug for Orthant {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "Orthant {{ coordinates: [")?;
+        let mut first = true;
+        for coord in self {
+            if first {
+                first = false;
+            } else {
+                write!(f, ", ")?;
+            }
+            write!(f, "{coord}")?;
+        }
+        write!(f, "] }}")?;
+        Ok(())
     }
 }
 
@@ -1065,7 +1082,7 @@ mod tests {
     }
 
     #[test]
-    fn test_display_implementations() {
+    fn orthant_display() {
         let orthant_2d = Orthant::from([1, 2]);
         assert_eq!(orthant_2d.to_string(), "(1, 2)");
 
@@ -1077,7 +1094,28 @@ mod tests {
 
         let single_orthant = Orthant::from([42]);
         assert_eq!(single_orthant.to_string(), "(42)");
+    }
 
+    #[test]
+    fn orthant_debug() {
+        // Zero entries (empty orthant)
+        let empty = Orthant::from([]);
+        assert_eq!(format!("{empty:?}"), "Orthant { coordinates: [] }");
+
+        // One entry
+        let single = Orthant::from([42]);
+        assert_eq!(format!("{single:?}"), "Orthant { coordinates: [42] }");
+
+        // Multiple entries (8 dimensions)
+        let eight_dim = Orthant::from([1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(
+            format!("{eight_dim:?}"),
+            "Orthant { coordinates: [1, 2, 3, 4, 5, 6, 7, 8] }"
+        );
+    }
+
+    #[test]
+    fn cube_display() {
         let vertex = Cube::vertex(Orthant::from([1, 1]));
         assert_eq!(
             vertex.to_string(),

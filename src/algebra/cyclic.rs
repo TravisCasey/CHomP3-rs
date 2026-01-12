@@ -213,7 +213,7 @@ impl<'de, const MOD: u64> Deserialize<'de> for Cyclic<MOD> {
     {
         struct U64Visitor;
 
-        impl<'de> Visitor<'de> for U64Visitor {
+        impl Visitor<'_> for U64Visitor {
             type Value = u64;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {

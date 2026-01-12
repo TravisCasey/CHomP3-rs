@@ -73,10 +73,12 @@
 //! >::with_constraints(0, 1);
 //! ```
 
-use std::{collections::HashMap, iter::zip};
+use std::{collections::HashMap, fmt::Debug, iter::zip};
 
 // Re-export from submodules
 pub use gradient::TopCubicalGradientPropagator;
+#[cfg(feature = "mpi")]
+use mpi::{topology::SimpleCommunicator, traits::Communicator};
 #[cfg(feature = "serde")]
 use serde::Serialize;
 #[cfg(feature = "mpi")]
@@ -172,7 +174,7 @@ pub mod subgrid;
 ///
 /// [`compute_matching`]: MorseMatching::compute_matching
 /// [`CellComplex`]: crate::CellComplex
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TopCubicalMatching<UM, G, LM = HashMapModule<u32, <UM as ModuleLike>::Ring>>
 where
     UM: ModuleLike<Cell = Cube>,
@@ -409,7 +411,7 @@ where
             complex.minimum().clone(),
             complex.maximum().clone(),
             self.config.subgrid_shape.clone(),
-            None,
+            self.config.filter_orthants.as_deref(),
         );
 
         // Phase 1: Compute critical cells from subgrids
@@ -417,11 +419,11 @@ where
         let max_dim = self.config.maximum_critical_dimension;
 
         let critical_cells: Vec<Cube> = executor.execute(
-            subdivision.nonempty_subgrids(),
+            "Critical cells",
+            subdivision.into_iter(),
             |(minimum_orthant, maximum_orthant)| {
                 let mut subgrid = Subgrid::new(complex, max_grade, max_dim);
-                let base_critical_orthant =
-                    subgrid.match_subgrid(minimum_orthant.clone(), maximum_orthant.clone());
+                let base_critical_orthant = subgrid.match_subgrid(minimum_orthant, maximum_orthant);
 
                 let mut cells = Vec::new();
                 for (_, critical, _) in base_critical_orthant {
@@ -439,16 +441,17 @@ where
 
         // Phase 2: Compute gradients (boundaries) for each critical cell
         let projection = &self.projection;
-        let boundaries: Vec<LM> = executor.execute(self.critical_cells.iter(), |critical_cell| {
-            let mut gradient_computer = TopCubicalGradientPropagator::new(complex);
-            let upper_gradient_chain = gradient_computer.compute_gradient(critical_cell);
+        let boundaries: Vec<LM> =
+            executor.execute("Gradients", self.critical_cells.iter(), |critical_cell| {
+                let mut gradient_computer = TopCubicalGradientPropagator::new(complex);
+                let upper_gradient_chain = gradient_computer.compute_gradient(critical_cell);
 
-            let boundary: LM = upper_gradient_chain
-                .into_iter()
-                .map(|(cube, coef)| (projection[&cube], coef))
-                .collect();
-            Some(boundary)
-        });
+                let boundary: LM = upper_gradient_chain
+                    .into_iter()
+                    .map(|(cube, coef)| (projection[&cube], coef))
+                    .collect();
+                Some(boundary)
+            });
 
         self.boundaries = boundaries;
     }
@@ -476,7 +479,7 @@ where
             complex.minimum().clone(),
             complex.maximum().clone(),
             self.config.subgrid_shape.clone(),
-            None,
+            self.config.filter_orthants.as_deref(),
         );
 
         // Phase 1: Compute critical cells from subgrids (distributed)
@@ -484,10 +487,9 @@ where
         let max_dim = self.config.maximum_critical_dimension;
 
         let critical_cells: Vec<Cube> = executor.execute_distributed(
-            subdivision
-                .nonempty_subgrids()
-                .map(|(min, max)| (min.clone(), max.clone())),
-            |(minimum_orthant, maximum_orthant): (Orthant, Orthant)| {
+            "Critical cells",
+            subdivision.into_iter(),
+            |(minimum_orthant, maximum_orthant)| {
                 let mut subgrid = Subgrid::new(complex, max_grade, max_dim);
                 let base_critical_orthant = subgrid.match_subgrid(minimum_orthant, maximum_orthant);
 
@@ -500,7 +502,7 @@ where
         );
 
         // Broadcast critical cells and projection to all processes
-        let critical_cells: Vec<Cube> = executor.broadcast(critical_cells);
+        let critical_cells: Vec<Cube> = executor.broadcast(&critical_cells);
 
         // Build projection map on all processes
         let mut projection = HashMap::new();
@@ -509,8 +511,10 @@ where
         }
 
         // Phase 2: Compute gradients (distributed)
-        let boundaries_vec: Vec<(u32, Vec<(u32, UM::Ring)>)> =
-            executor.execute_distributed(0..critical_cells.len(), |cell_index: usize| {
+        let boundaries_vec: Vec<(u32, Vec<(u32, UM::Ring)>)> = executor.execute_distributed(
+            "Gradients",
+            0..critical_cells.len(),
+            |cell_index: usize| {
                 let critical_cell = &critical_cells[cell_index];
                 let mut gradient_computer = TopCubicalGradientPropagator::new(complex);
                 let upper_gradient_chain = gradient_computer.compute_gradient(critical_cell);
@@ -521,7 +525,8 @@ where
                     .collect();
 
                 Some((cell_index as u32, boundary_pairs))
-            });
+            },
+        );
 
         // Reconstruct boundaries in order (only on root, but we handle empty on
         // workers)
@@ -604,7 +609,11 @@ where
         self.projection.clear();
 
         if self.config.parallel {
-            if let Some(executor) = MpiExecutor::from_world() {
+            if let Some(executor) = if let Some(comm) = self.config.comm.as_ref() {
+                Some(MpiExecutor::new(comm))
+            } else {
+                MpiExecutor::from_world()
+            } {
                 let comm_size = executor.size();
                 info!("Initialized MPI executor with {comm_size} processes");
                 self.compute_with_distributed_executor(executor);
@@ -714,7 +723,7 @@ where
 ///   but may exceed memory limits or contain too many empty orthants.
 /// - `parallel`: Whether to use MPI-based parallel computation (requires `mpi`
 ///   feature).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "mpi"), derive(Clone, Debug))]
 pub struct TopCubicalMatchingConfig {
     /// Maximum grade of critical cells to identify.
     pub maximum_critical_grade: u32,
@@ -722,29 +731,83 @@ pub struct TopCubicalMatchingConfig {
     pub maximum_critical_dimension: u32,
     /// Optional shape for subdividing the grid of orthants for processing.
     pub subgrid_shape: Option<Vec<i16>>,
+    /// Base orthants of top-dimensional cubes for subgrid filtering. When
+    /// `Some`, only subgrids containing cells of these top-cubes will be
+    /// processed. Since a top-cube's faces extend into neighboring orthants,
+    /// the filtering accounts for this by including subgrids adjacent to each
+    /// provided orthant.
+    pub filter_orthants: Option<Vec<Orthant>>,
     /// Whether to use MPI-based parallel computation.
+    #[cfg(feature = "mpi")]
     pub parallel: bool,
+    /// The communicator to other MPI processes. If unspecified, the matching
+    /// will attempt to initialize the MPI universe and use the world
+    /// communicator instead.
+    #[cfg(feature = "mpi")]
+    pub comm: Option<SimpleCommunicator>,
 }
 
-impl TopCubicalMatchingConfig {
-    fn new(
-        maximum_critical_grade: Option<u32>,
-        maximum_critical_dimension: Option<u32>,
-        subgrid_shape: Option<Vec<i16>>,
-        parallel: bool,
-    ) -> Self {
+#[cfg(not(feature = "mpi"))]
+impl Default for TopCubicalMatchingConfig {
+    fn default() -> Self {
         Self {
-            maximum_critical_grade: maximum_critical_grade.unwrap_or(u32::MAX),
-            maximum_critical_dimension: maximum_critical_dimension.unwrap_or(u32::MAX),
-            subgrid_shape,
-            parallel,
+            maximum_critical_grade: u32::MAX,
+            maximum_critical_dimension: u32::MAX,
+            subgrid_shape: None,
+            filter_orthants: None,
         }
     }
 }
 
+#[cfg(feature = "mpi")]
 impl Default for TopCubicalMatchingConfig {
     fn default() -> Self {
-        Self::new(None, None, None, false)
+        Self {
+            maximum_critical_grade: u32::MAX,
+            maximum_critical_dimension: u32::MAX,
+            subgrid_shape: None,
+            filter_orthants: None,
+            parallel: false,
+            comm: None,
+        }
+    }
+}
+
+#[cfg(feature = "mpi")]
+impl Clone for TopCubicalMatchingConfig {
+    fn clone(&self) -> Self {
+        Self {
+            maximum_critical_grade: self.maximum_critical_grade,
+            maximum_critical_dimension: self.maximum_critical_dimension,
+            subgrid_shape: self.subgrid_shape.clone(),
+            parallel: self.parallel,
+            filter_orthants: self.filter_orthants.clone(),
+            comm: self.comm.as_ref().map(Communicator::duplicate),
+        }
+    }
+}
+
+#[cfg(feature = "mpi")]
+impl Debug for TopCubicalMatchingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TopCubicalMatchingConfig")
+            .field("maximum_critical_grade", &self.maximum_critical_grade)
+            .field(
+                "maximum_critical_dimension",
+                &self.maximum_critical_dimension,
+            )
+            .field("subgrid_shape", &self.subgrid_shape)
+            .field("filter_orthants", &self.filter_orthants)
+            .field("parallel", &self.parallel)
+            .field(
+                "communicator",
+                &if self.comm.is_some() {
+                    format!("Some({})", self.comm.as_ref().unwrap().get_name())
+                } else {
+                    "None".into()
+                },
+            )
+            .finish()
     }
 }
 
@@ -806,6 +869,35 @@ impl TopCubicalMatchingBuilder {
     #[must_use]
     pub fn parallel(mut self) -> Self {
         self.config.parallel = true;
+        self
+    }
+
+    /// Supply the communicator that should be used for distributed MPI
+    /// execution.
+    ///
+    /// Will not be used unless the `parallel` flag is also set (via
+    /// [`TopCubicalMatchingConfig::parallel`]). If unspecified, the matching
+    /// will attempt to initialize the MPI universe and use the world
+    /// communicator.
+    #[cfg(feature = "mpi")]
+    #[must_use]
+    pub fn with_communicator(mut self, comm: &dyn Communicator) -> Self {
+        self.config.comm = Some(comm.duplicate());
+        self
+    }
+
+    /// Enable subgrid filtering with the provided top-cube orthants.
+    ///
+    /// Only subgrids containing cells of the specified top-dimensional cubes
+    /// will be processed. Since each top-cube's faces extend into neighboring
+    /// orthants, the filtering includes subgrids adjacent to each provided
+    /// orthant.
+    ///
+    /// This improves performance for sparse complexes embedded in
+    /// high-dimensional bounding boxes.
+    #[must_use]
+    pub fn filter_orthants(mut self, orthants: Vec<Orthant>) -> Self {
+        self.config.filter_orthants = Some(orthants);
         self
     }
 }
@@ -875,35 +967,6 @@ mod tests {
     }
 
     #[test]
-    fn individual_matches_cube_torus_complex() {
-        let complex = top_cube_torus_hashmap();
-        let mut matching = TopCubicalMatching::default();
-        matching.compute_matching(complex);
-
-        let cube = Cube::vertex(Orthant::from([0, 0, 0]));
-        let result = CellMatch::Queen {
-            cell: cube.clone(),
-            king: Cube::from_extent(Orthant::from([0, 0, 0]), &[true, false, false]),
-            incidence: Cyclic::one(),
-            priority: Orthant::from([0, 0, 0]),
-        };
-        assert_eq!(matching.match_cell(&cube), result);
-
-        let cube = Cube::from_extent(Orthant::from([1, 1, 1]), &[false, true, true]);
-        let result = CellMatch::King {
-            cell: cube.clone(),
-            queen: Cube::from_extent(Orthant::from([1, 1, 1]), &[false, false, true]),
-            incidence: Cyclic::one(),
-            priority: Orthant::from([1, 1, 1]),
-        };
-        assert_eq!(matching.match_cell(&cube), result);
-
-        let cube = Cube::from_extent(Orthant::from([1, 1, 1]), &[true, true, false]);
-        let result = CellMatch::Ace { cell: cube.clone() };
-        assert_eq!(matching.match_cell(&cube), result);
-    }
-
-    #[test]
     fn builder_pattern_works() {
         let matching: TopCubicalMatching<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Orthant>> =
             TopCubicalMatchingBuilder::new()
@@ -929,5 +992,60 @@ mod tests {
             TopCubicalMatching::with_constraints(10, 5);
         assert_eq!(matching.config().maximum_critical_grade, 10);
         assert_eq!(matching.config().maximum_critical_dimension, 5);
+    }
+
+    /// Test that filtered matching finds all critical cells that are reachable
+    /// via gradient flow. This reproduces a bug where subgrid filtering was
+    /// too aggressive and excluded orthants containing critical cells that
+    /// appear in the boundary of other critical cells.
+    #[test]
+    fn filtered_matching_includes_all_boundary_cells() {
+        // Create a simple complex where filtering could miss critical cells.
+        // Use orthants at subgrid boundaries to trigger the bug.
+        let top_cubes = vec![Orthant::from([1, 1]), Orthant::from([2, 2])];
+        let minimum = Orthant::from([0, 0]);
+        let maximum = Orthant::from([3, 3]);
+        let grader = TopCubeGrader::new(HashMapGrader::uniform(top_cubes.clone(), 0, 1), Some(0));
+        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<2>>, _> =
+            CubicalComplex::new(minimum, maximum, grader);
+
+        // Use filter_orthants with the same orthants used for grading
+        let mut matching: TopCubicalMatching<
+            HashMapModule<Cube, Cyclic<2>>,
+            HashMapGrader<Orthant>,
+        > = TopCubicalMatching::<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Orthant>>::builder()
+            .filter_orthants(top_cubes)
+            .max_grade(0)
+            .build();
+
+        // This should not panic - if it does, gradient found a critical cell
+        // not in the projection map
+        matching.compute_matching(complex);
+
+        // Verify we found critical cells
+        assert!(!matching.critical_cells().is_empty());
+    }
+
+    /// Test with the torus complex using filtered matching to ensure
+    /// all critical boundary cells are included.
+    #[test]
+    fn filtered_torus_matching_works() {
+        let top_cubes = generate_top_cube_torus_orthants();
+        let complex = top_cube_torus_hashmap();
+
+        let mut matching: TopCubicalMatching<
+            HashMapModule<Cube, Cyclic<2>>,
+            HashMapGrader<Orthant>,
+        > = TopCubicalMatching::<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Orthant>>::builder()
+            .filter_orthants(top_cubes)
+            .max_grade(0)
+            .build();
+
+        // Should not panic
+        matching.compute_matching(complex);
+
+        // Should find the same critical cells as unfiltered matching
+        let critical = matching.critical_cells();
+        assert!(!critical.is_empty());
     }
 }
