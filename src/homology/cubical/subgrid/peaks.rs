@@ -358,9 +358,7 @@ where
 ///    `SubgridGradeCache` object. This can be efficiently determined using the
 ///    `Subgrid::axis_increments` field when incrementing/decrementing orthant
 ///    axes,
-/// 3. `extent`: The extent (see perhaps, [`Cube::from_extent`]), but
-///    represented as bits set in an integer (`[false, true, true]` is
-///    equivalent to `0b110`).
+/// 3. `extent`: The corresponding extent bitstring.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct OrthantWrapper {
     pub(super) orthant: Orthant,

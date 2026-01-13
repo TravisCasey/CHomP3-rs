@@ -75,8 +75,6 @@
 
 use std::{collections::HashMap, fmt::Debug, iter::zip};
 
-// Re-export from submodules
-pub use gradient::TopCubicalGradientPropagator;
 #[cfg(feature = "mpi")]
 use mpi::{topology::SimpleCommunicator, traits::Communicator};
 #[cfg(feature = "serde")]
@@ -86,18 +84,18 @@ use serde::de::DeserializeOwned;
 pub use subgrid::{GridSubdivision, OrthantMatching, Subgrid};
 #[cfg(feature = "mpi")]
 use tracing::{info, warn};
+pub use wavefront::{FlowCell, Wavefront, WavefrontConfig};
 
 #[cfg(feature = "mpi")]
 use crate::executor::{DistributedExecutor, MpiExecutor};
 use crate::{
-    CellMatch, Cube, CubicalComplex, Grader, HashMapModule, ModuleLike, MorseMatching, Orthant,
-    RingLike, TopCubeGrader,
+    CellMatch, ComplexLike, Cube, CubicalComplex, Grader, HashMapModule, ModuleLike, MorseMatching,
+    Orthant, RingLike, TopCubeGrader,
     executor::{Executor, SequentialExecutor},
 };
 
-// Public submodules for advanced users
-pub mod gradient;
 pub mod subgrid;
+pub mod wavefront;
 
 /// Discrete Morse matching for cubical complexes with top-cube grading.
 ///
@@ -439,21 +437,15 @@ where
         }
         self.critical_cells = critical_cells;
 
-        // Phase 2: Compute gradients (boundaries) for each critical cell
-        let projection = &self.projection;
-        let boundaries: Vec<LM> =
-            executor.execute("Gradients", self.critical_cells.iter(), |critical_cell| {
-                let mut gradient_computer = TopCubicalGradientPropagator::new(complex);
-                let upper_gradient_chain = gradient_computer.compute_gradient(critical_cell);
-
-                let boundary: LM = upper_gradient_chain
-                    .into_iter()
-                    .map(|(cube, coef)| (projection[&cube], coef))
-                    .collect();
-                Some(boundary)
-            });
-
-        self.boundaries = boundaries;
+        // Phase 2: Compute boundaries for each critical cell using lower()
+        self.boundaries = self
+            .critical_cells
+            .iter()
+            .map(|critical_cell| {
+                let boundary_chain = complex.cell_boundary(critical_cell);
+                self.lower_impl(boundary_chain)
+            })
+            .collect();
     }
 }
 
@@ -501,43 +493,23 @@ where
             },
         );
 
-        // Broadcast critical cells and projection to all processes
-        let critical_cells: Vec<Cube> = executor.broadcast(&critical_cells);
-
-        // Build projection map on all processes
-        let mut projection = HashMap::new();
+        // Build projection map
         for (index, cube) in critical_cells.iter().enumerate() {
-            projection.insert(cube.clone(), index as u32);
+            self.projection.insert(cube.clone(), index as u32);
         }
-
-        // Phase 2: Compute gradients (distributed)
-        let boundaries_vec: Vec<(u32, Vec<(u32, UM::Ring)>)> = executor.execute_distributed(
-            "Gradients",
-            0..critical_cells.len(),
-            |cell_index: usize| {
-                let critical_cell = &critical_cells[cell_index];
-                let mut gradient_computer = TopCubicalGradientPropagator::new(complex);
-                let upper_gradient_chain = gradient_computer.compute_gradient(critical_cell);
-
-                let boundary_pairs: Vec<(u32, UM::Ring)> = upper_gradient_chain
-                    .into_iter()
-                    .map(|(cube, coef)| (projection[&cube], coef))
-                    .collect();
-
-                Some((cell_index as u32, boundary_pairs))
-            },
-        );
-
-        // Reconstruct boundaries in order (only on root, but we handle empty on
-        // workers)
-        let mut boundaries: Vec<LM> = vec![LM::new(); critical_cells.len()];
-        for (cell_index, boundary_pairs) in boundaries_vec {
-            boundaries[cell_index as usize] = LM::from_iter(boundary_pairs);
-        }
-
         self.critical_cells = critical_cells;
-        self.projection = projection;
-        self.boundaries = boundaries;
+
+        // Phase 2: Compute boundaries for each critical cell using lower()
+        // This is done locally since the wavefront approach efficiently
+        // processes orthants in order.
+        self.boundaries = self
+            .critical_cells
+            .iter()
+            .map(|critical_cell| {
+                let boundary_chain = complex.cell_boundary(critical_cell);
+                self.lower_impl(boundary_chain)
+            })
+            .collect();
     }
 }
 
@@ -575,6 +547,10 @@ where
         self.complex.as_ref()
     }
 
+    fn include_cell_impl(&self, cell: u32) -> Cube {
+        self.critical_cells[cell as usize].clone()
+    }
+
     fn boundary_and_coboundary_impl(&self) -> (Vec<LM>, Vec<LM>) {
         let mut coboundaries = vec![LM::new(); self.boundaries.len()];
         for (cell, boundary) in self.boundaries.iter().enumerate() {
@@ -584,6 +560,120 @@ where
         }
 
         (self.boundaries.clone(), coboundaries)
+    }
+
+    /// Compute the orthant matching for a single orthant.
+    fn compute_orthant_matching(&self, orthant: &Orthant) -> OrthantMatching {
+        let mut subgrid = Subgrid::new(self.complex.as_ref().unwrap(), u32::MAX, u32::MAX);
+        subgrid.match_subgrid(orthant.clone(), orthant.clone())[0]
+            .2
+            .clone()
+    }
+
+    fn lower_impl(&self, chain: UM) -> LM {
+        let complex = self.complex.as_ref().unwrap();
+        let mut wavefront = Wavefront::new(
+            WavefrontConfig::Boundary,
+            complex.minimum().clone(),
+            complex.maximum().clone(),
+        );
+        let mut result = LM::new();
+
+        wavefront.seed(chain);
+
+        while let Some((orthant, orthant_chain)) = wavefront.pop_next() {
+            let matching = self.compute_orthant_matching(&orthant);
+
+            wavefront.flow_orthant(&orthant, orthant_chain, &matching, |cell| {
+                if let FlowCell::Ace { extent, coef } = cell {
+                    let lower_cell = self.projection[&wavefront::extent_to_cube(&orthant, extent)];
+                    result.insert_or_add(lower_cell, coef);
+                }
+            });
+        }
+
+        result
+    }
+
+    fn colower_impl(&self, chain: UM) -> LM {
+        let complex = self.complex.as_ref().unwrap();
+        let mut wavefront = Wavefront::new(
+            WavefrontConfig::Coboundary,
+            complex.minimum().clone(),
+            complex.maximum().clone(),
+        );
+        let mut result = LM::new();
+
+        wavefront.seed(chain);
+
+        while let Some((orthant, orthant_chain)) = wavefront.pop_next() {
+            let matching = self.compute_orthant_matching(&orthant);
+
+            wavefront.flow_orthant(&orthant, orthant_chain, &matching, |cell| {
+                if let FlowCell::Ace { extent, coef } = cell {
+                    let lower_cell = self.projection[&wavefront::extent_to_cube(&orthant, extent)];
+                    result.insert_or_add(lower_cell, coef);
+                }
+            });
+        }
+
+        result
+    }
+
+    fn lift_impl(&self, chain: LM) -> UM {
+        let complex = self.complex.as_ref().unwrap();
+        let mut wavefront = Wavefront::new(
+            WavefrontConfig::Boundary,
+            complex.minimum().clone(),
+            complex.maximum().clone(),
+        );
+
+        let mut result = UM::new();
+        for (lower_cell, coef) in chain {
+            result.insert_or_add(self.include_cell_impl(lower_cell), coef);
+        }
+        wavefront.seed(complex.boundary(&result));
+
+        while let Some((orthant, orthant_chain)) = wavefront.pop_next() {
+            let matching = self.compute_orthant_matching(&orthant);
+
+            wavefront.flow_orthant(&orthant, orthant_chain, &matching, |cell| {
+                if let FlowCell::Queen { king_extent, coef } = cell {
+                    let king_cube = wavefront::extent_to_cube(&orthant, king_extent);
+                    result.insert_or_add(king_cube, coef);
+                }
+            });
+        }
+
+        result
+    }
+
+    fn colift_impl(&self, chain: LM) -> UM {
+        let complex = self.complex.as_ref().unwrap();
+        let mut wavefront = Wavefront::new(
+            WavefrontConfig::Coboundary,
+            complex.minimum().clone(),
+            complex.maximum().clone(),
+        );
+
+        let mut result = UM::new();
+        for (lower_cell, coef) in chain {
+            result.insert_or_add(self.include_cell_impl(lower_cell), coef);
+        }
+        wavefront.seed(complex.coboundary(&result));
+
+        while let Some((orthant, orthant_chain)) = wavefront.pop_next() {
+            let matching = self.compute_orthant_matching(&orthant);
+
+            wavefront.flow_orthant(&orthant, orthant_chain, &matching, |cell| {
+                if let FlowCell::King { queen_extent, coef } = cell {
+                    let queen_cube = wavefront::extent_to_cube(&orthant, queen_extent);
+                    result.insert_or_add(queen_cube, coef);
+                }
+            });
+        }
+
+        result
     }
 }
 
@@ -646,11 +736,27 @@ where
     }
 
     fn include_cell(&self, cell: u32) -> Self::UpperCell {
-        self.critical_cells[cell as usize].clone()
+        self.include_cell_impl(cell)
     }
 
     fn boundary_and_coboundary(&self) -> (Vec<Self::LowerModule>, Vec<Self::LowerModule>) {
         self.boundary_and_coboundary_impl()
+    }
+
+    fn lower(&self, chain: Self::UpperModule) -> Self::LowerModule {
+        self.lower_impl(chain)
+    }
+
+    fn colower(&self, chain: Self::UpperModule) -> Self::LowerModule {
+        self.colower_impl(chain)
+    }
+
+    fn lift(&self, chain: Self::LowerModule) -> Self::UpperModule {
+        self.lift_impl(chain)
+    }
+
+    fn colift(&self, chain: Self::LowerModule) -> Self::UpperModule {
+        self.colift_impl(chain)
     }
 }
 
@@ -698,11 +804,27 @@ where
     }
 
     fn include_cell(&self, cell: u32) -> Self::UpperCell {
-        self.critical_cells[cell as usize].clone()
+        self.include_cell_impl(cell)
     }
 
     fn boundary_and_coboundary(&self) -> (Vec<Self::LowerModule>, Vec<Self::LowerModule>) {
         self.boundary_and_coboundary_impl()
+    }
+
+    fn lower(&self, chain: Self::UpperModule) -> Self::LowerModule {
+        self.lower_impl(chain)
+    }
+
+    fn colower(&self, chain: Self::UpperModule) -> Self::LowerModule {
+        self.colower_impl(chain)
+    }
+
+    fn lift(&self, chain: Self::LowerModule) -> Self::UpperModule {
+        self.lift_impl(chain)
+    }
+
+    fn colift(&self, chain: Self::LowerModule) -> Self::UpperModule {
+        self.colift_impl(chain)
     }
 }
 
@@ -1047,5 +1169,47 @@ mod tests {
         // Should find the same critical cells as unfiltered matching
         let critical = matching.critical_cells();
         assert!(!critical.is_empty());
+    }
+
+    #[test]
+    fn colift_roundtrips_correctly() {
+        let complex = top_cube_torus_hashmap();
+        let mut matching: TopCubicalMatching<
+            HashMapModule<Cube, Cyclic<2>>,
+            HashMapGrader<Orthant>,
+        > = TopCubicalMatching::default();
+        matching.compute_matching(complex);
+
+        for lower_cell in matching
+            .critical_cells()
+            .into_iter()
+            .map(|cube| matching.project_cell(cube).unwrap())
+        {
+            let chain = HashMapModule::singleton(lower_cell, Cyclic::one());
+            let colifted = matching.colift(chain.clone());
+            let colowered = matching.colower(colifted);
+            assert_eq!(chain, colowered,);
+        }
+    }
+
+    #[test]
+    fn lower_lift_roundtrip() {
+        let complex = top_cube_torus_hashmap();
+        let mut matching: TopCubicalMatching<
+            HashMapModule<Cube, Cyclic<2>>,
+            HashMapGrader<Orthant>,
+        > = TopCubicalMatching::default();
+        matching.compute_matching(complex);
+
+        for lower_cell in matching
+            .critical_cells()
+            .into_iter()
+            .map(|cube| matching.project_cell(cube).unwrap())
+        {
+            let chain = HashMapModule::singleton(lower_cell, Cyclic::one());
+            let lifted = matching.lift(chain.clone());
+            let lowered = matching.lower(lifted);
+            assert_eq!(chain, lowered,);
+        }
     }
 }
