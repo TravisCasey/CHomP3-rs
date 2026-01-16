@@ -2,11 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! MPI-based distributed executor for parallel computation across processes.
-//!
-//! This module provides [`MpiExecutor`], which distributes work items across
-//! MPI processes using a work-stealing pattern. The root process (rank 0)
-//! lazily iterates work items and assigns them to workers on demand.
+//! MPI-based distributed executor implementation.
 
 use bincode::serde::{decode_from_slice, encode_to_vec};
 use mpi::{
@@ -16,13 +12,7 @@ use mpi::{
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{debug, info, trace, warn};
 
-use super::{DistributedExecutor, Executor};
-use crate::{executor::SequentialExecutor, logging::ProgressTracker};
-
 /// Message tags for MPI communication protocol.
-///
-/// These tags distinguish different message types in the work-stealing
-/// protocol.
 #[derive(Clone, Copy)]
 #[repr(i32)]
 enum MpiTag {
@@ -48,12 +38,11 @@ enum MpiTag {
 /// 2. Root process iterates to the next work item and assigns it to the worker.
 /// 3. Worker computes results and submits the results to the root process.
 /// 4. Once the iterator is exhausted, the root process sends a shutdown signal
-///    to the workers
+///    to the workers.
 ///
 /// # Panics
 ///
 /// The executor panics on serialization errors or MPI communication failures.
-/// Work items cannot be skipped in the current implementation.
 pub struct MpiExecutor {
     comm: SimpleCommunicator,
 }
@@ -68,7 +57,7 @@ impl MpiExecutor {
     /// # Example
     ///
     /// ```ignore
-    /// use chomp3rs::executor::MpiExecutor;
+    /// use chompi::MpiExecutor;
     /// use mpi::traits::Communicator;
     ///
     /// let universe = mpi::initialize().unwrap();
@@ -89,7 +78,7 @@ impl MpiExecutor {
     /// # Example
     ///
     /// ```ignore
-    /// use chomp3rs::executor::MpiExecutor;
+    /// use chompi::MpiExecutor;
     ///
     /// if let Some(executor) = MpiExecutor::from_world() {
     ///     // Use executor for distributed computation
@@ -100,13 +89,13 @@ impl MpiExecutor {
         mpi::initialize().map(|universe| Self::new(&universe.world()))
     }
 
-    /// Returns the rank of this process in the communicator.
+    /// Returns the rank of this process in the stored communicator.
     #[must_use]
     pub fn rank(&self) -> i32 {
         self.comm.rank()
     }
 
-    /// Returns the total number of processes in the communicator.
+    /// Returns the total number of processes in the stored communicator.
     #[must_use]
     pub fn size(&self) -> i32 {
         self.comm.size()
@@ -118,16 +107,112 @@ impl MpiExecutor {
         self.comm.rank() == 0
     }
 
-    /// Root process: distribute work items to workers and collect results.
+    /// Execute a stateless computation distributed across MPI processes.
     ///
-    /// Lazily iterates work items, assigning them to workers as they request
-    /// work. Collects and flattens all results.
-    fn run_as_root<I, O, R, F>(&mut self, label: &'static str, work_items: I, compute: F) -> Vec<R>
+    /// Distributes work items from the iterator across all MPI processes.
+    /// Each work item is serialized and sent to a worker, which deserializes
+    /// it, applies the compute function, and sends results back.
+    ///
+    /// For computations that benefit from persistent per-worker state, use
+    /// [`execute_with_state`](Self::execute_with_state) instead.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `I`: Iterator yielding work items (must be `ExactSizeIterator` for
+    ///   progress tracking)
+    /// - `C`: Collection type returned by compute function
+    /// - `R`: Result element type
+    ///
+    /// # Returns
+    ///
+    /// On the root process: vector of all results from all workers.
+    /// On worker processes: empty vector.
+    pub fn execute<I, C, R>(
+        &mut self,
+        label: &str,
+        work_items: I,
+        compute: impl Fn(I::Item) -> C,
+    ) -> Vec<R>
+    where
+        I: ExactSizeIterator,
+        I::Item: Serialize + DeserializeOwned,
+        C: IntoIterator<Item = R> + Serialize + DeserializeOwned,
+    {
+        self.execute_with_state(label, work_items, || (), |(), item| compute(item))
+    }
+
+    /// Execute a computation with per-worker persistent state.
+    ///
+    /// Similar to [`execute`](Self::execute), but allows each worker to
+    /// maintain state across work items. The `init` function is called once
+    /// per process to create the initial state, which is then passed mutably
+    /// to each `compute` invocation.
+    ///
+    /// This is useful when workers need expensive setup (e.g., creating
+    /// caches or auxiliary data structures) that should be reused across
+    /// multiple work items.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `I`: Iterator yielding work items
+    /// - `C`: Collection type returned by compute function
+    /// - `R`: Result element type
+    /// - `S`: Worker state type
+    ///
+    /// # Returns
+    ///
+    /// On the root process: vector of all results from all workers.
+    /// On worker processes: empty vector.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use chompi::MpiExecutor;
+    ///
+    /// let mut executor = MpiExecutor::from_world().unwrap();
+    ///
+    /// // Each worker creates an expensive cache once
+    /// let results = executor.execute_with_state(
+    ///     "Processing",
+    ///     work_items.into_iter(),
+    ///     || ExpensiveCache::new(),
+    ///     |cache, item| process_with_cache(cache, item),
+    /// );
+    /// ```
+    pub fn execute_with_state<I, C, R, S>(
+        &mut self,
+        label: &str,
+        work_items: I,
+        init: impl FnOnce() -> S,
+        compute: impl Fn(&mut S, I::Item) -> C,
+    ) -> Vec<R>
+    where
+        I: ExactSizeIterator,
+        I::Item: Serialize + DeserializeOwned,
+        C: IntoIterator<Item = R> + Serialize + DeserializeOwned,
+    {
+        let mut state = init();
+
+        if self.is_root() {
+            self.run_as_root(label, work_items, &mut state, compute)
+        } else {
+            self.run_as_worker(&mut state, compute);
+            Vec::new()
+        }
+    }
+
+    /// Root process: distribute work items to workers and collect results.
+    fn run_as_root<I, C, R, S>(
+        &mut self,
+        label: &str,
+        work_items: I,
+        state: &mut S,
+        compute: impl Fn(&mut S, I::Item) -> C,
+    ) -> Vec<R>
     where
         I: ExactSizeIterator,
         I::Item: Serialize,
-        O: IntoIterator<Item = R> + DeserializeOwned,
-        F: Fn(I::Item) -> O,
+        C: IntoIterator<Item = R> + DeserializeOwned,
     {
         let total_work_items = work_items.len();
 
@@ -143,17 +228,17 @@ impl MpiExecutor {
         // If no workers, execute locally
         if active_workers == 0 {
             warn!("No MPI worker processes available, executing locally");
-            return <Self as Executor>::execute(self, label, work_items, compute);
+            return work_items.flat_map(|item| compute(state, item)).collect();
         }
 
         let mut work_iter = work_items.peekable();
         let mut results = Vec::new();
-        let mut progress =
-            ProgressTracker::new(format!("{label} (MPI Distributed)"), total_work_items);
 
-        // Main dispatch loop
+        info!("{label} (MPI Distributed): 0/{total_work_items}");
+        let mut completed = 0usize;
+
+        // Main work-stealing loop
         while active_workers > 0 {
-            // Wait for any worker to send a message (either request or result)
             let (msg_bytes, status): (Vec<u8>, _) = self.comm.any_process().receive_vec();
             let source_rank = status.source_rank();
             let tag = status.tag();
@@ -164,28 +249,30 @@ impl MpiExecutor {
             } else if tag == MpiTag::ResultSubmission as i32 {
                 trace!("Received results from MPI rank {source_rank}");
 
-                // Decode and collect results
-                let worker_results: O = decode_from_slice(&msg_bytes, bincode::config::standard())
+                let worker_results: C = decode_from_slice(&msg_bytes, bincode::config::standard())
                     .expect("failed to decode results from MPI worker process")
                     .0;
                 results.extend(worker_results);
-                progress.increment();
 
-                // Assign next work item or shutdown
+                completed += 1;
+                if completed.is_multiple_of(10) || completed == total_work_items {
+                    info!("{label} (MPI Distributed): {completed}/{total_work_items}");
+                }
+
                 self.assign_work_or_shutdown(&mut work_iter, source_rank, &mut active_workers);
             } else {
-                panic!("root received unexpected message tag {tag} from MPI rank {source_rank}",);
+                panic!("root received unexpected message tag {tag} from MPI rank {source_rank}");
             }
         }
 
-        progress.finish();
+        info!("{label} (MPI Distributed): completed");
         results
     }
 
     /// Helper to assign work to a worker or send shutdown signal.
     fn assign_work_or_shutdown<I>(
         &self,
-        work_iter: &mut std::iter::Peekable<I>,
+        work_iter: &mut I,
         worker_rank: i32,
         active_workers: &mut usize,
     ) where
@@ -198,39 +285,33 @@ impl MpiExecutor {
             self.comm
                 .process_at_rank(worker_rank)
                 .send_with_tag(&encoded, MpiTag::WorkAssignment as i32);
-            trace!("Assigned work to rank MPI {worker_rank}",);
+            trace!("Assigned work to MPI rank {worker_rank}");
         } else {
-            // No more work; shutdown this worker
             self.comm
                 .process_at_rank(worker_rank)
                 .send_with_tag(&Vec::<u8>::new(), MpiTag::Shutdown as i32);
             *active_workers -= 1;
             trace!(
-                "Sent shutdown to rank MPI {worker_rank}, {} MPI worker processes remaining",
-                *active_workers
+                "Sent shutdown to MPI rank {worker_rank}, {active_workers} worker processes \
+                 remaining",
             );
         }
     }
 
     /// Worker process: request work, compute, and submit results.
-    ///
-    /// Loops until receiving a shutdown signal from root.
-    fn run_as_worker<T, O, R, F>(&self, compute: F)
+    fn run_as_worker<T, C, R, S>(&self, state: &mut S, compute: impl Fn(&mut S, T) -> C)
     where
         T: DeserializeOwned,
-        O: IntoIterator<Item = R> + Serialize,
-        F: Fn(T) -> O,
+        C: IntoIterator<Item = R> + Serialize,
     {
         let rank = self.comm.rank();
         debug!("MPI rank {rank} worker process starting");
 
-        // Send initial work request
         self.comm
             .process_at_rank(0)
             .send_with_tag(&Vec::<u8>::new(), MpiTag::WorkRequest as i32);
 
         loop {
-            // Receive work assignment or shutdown
             let (msg_bytes, status): (Vec<u8>, _) = self.comm.process_at_rank(0).receive_vec();
             let tag = status.tag();
 
@@ -244,15 +325,12 @@ impl MpiExecutor {
                 "MPI worker process rank {rank} received unexpected message tag {tag}"
             );
 
-            // Decode work item
             let work_item: T = decode_from_slice(&msg_bytes, bincode::config::standard())
                 .expect("failed to decode work item")
                 .0;
 
-            // Compute results
-            let results = compute(work_item);
+            let results = compute(state, work_item);
 
-            // Send results back to root
             let encoded_results = encode_to_vec(&results, bincode::config::standard())
                 .expect("failed to encode results");
             self.comm
@@ -266,8 +344,7 @@ impl MpiExecutor {
     /// Broadcast data from root to all processes.
     ///
     /// The root process (rank 0) sends its data to all other processes.
-    /// Non-root processes receive the data and return it, ignoring their
-    /// input.
+    /// Non-root processes receive the data, ignoring their input value.
     ///
     /// # Panics
     ///
@@ -276,9 +353,9 @@ impl MpiExecutor {
     /// # Example
     ///
     /// ```ignore
-    /// use chomp3rs::executor::MpiExecutor;
+    /// use chompi::MpiExecutor;
     ///
-    /// let mut executor = MpiExecutor::from_world().unwrap();
+    /// let executor = MpiExecutor::from_world().unwrap();
     ///
     /// // Root has data, workers have empty placeholder
     /// let my_data = if executor.is_root() {
@@ -295,7 +372,6 @@ impl MpiExecutor {
     where
         T: Serialize + DeserializeOwned,
     {
-        // Encode data on root
         let encoded = if self.is_root() {
             encode_to_vec(data, bincode::config::standard())
                 .expect("failed to encode for broadcast")
@@ -303,12 +379,9 @@ impl MpiExecutor {
             Vec::new()
         };
 
-        // Broadcast the length first
         let mut len = encoded.len() as i32;
         self.comm.process_at_rank(0).broadcast_into(&mut len);
 
-        // Prepare buffer and broadcast data
-        //
         // Sent `len` is originally a usize, so cast signed -> unsigned is fine
         #[allow(clippy::cast_sign_loss)]
         let mut buffer = if self.is_root() {
@@ -318,62 +391,8 @@ impl MpiExecutor {
         };
         self.comm.process_at_rank(0).broadcast_into(&mut buffer);
 
-        // Decode on all processes
         decode_from_slice(&buffer, bincode::config::standard())
             .expect("failed to decode broadcast data")
             .0
-    }
-}
-
-impl Executor for MpiExecutor {
-    /// Execute computation locally on this process only.
-    ///
-    /// This implementation runs sequentially on the calling process without
-    /// any MPI communication. For distributed execution across MPI processes,
-    /// use [`DistributedExecutor::execute_distributed`] instead.
-    ///
-    /// This method exists to satisfy the `Executor` supertrait requirement,
-    /// allowing `MpiExecutor` to be used in contexts which only require local
-    /// execution.
-    fn execute<I, O, R, F>(&mut self, label: &'static str, work_items: I, compute: F) -> Vec<R>
-    where
-        I: ExactSizeIterator,
-        O: IntoIterator<Item = R>,
-        F: Fn(I::Item) -> O,
-    {
-        // Local execution only - no MPI communication
-        SequentialExecutor.execute(label, work_items, compute)
-    }
-}
-
-impl DistributedExecutor for MpiExecutor {
-    /// Execute computation distributed across MPI processes.
-    ///
-    /// The root process (rank 0) distributes work items to workers and
-    /// collects results. Worker processes compute assigned items and return
-    /// an empty vector (results are gathered at root).
-    ///
-    /// # Type Requirements
-    ///
-    /// - `I::Item`: Must be serializable for sending work items to workers
-    /// - `O`: Must be serializable for sending results back to root
-    fn execute_distributed<I, O, R, F>(
-        &mut self,
-        label: &'static str,
-        work_items: I,
-        compute: F,
-    ) -> Vec<R>
-    where
-        I: ExactSizeIterator,
-        I::Item: Serialize + DeserializeOwned,
-        O: IntoIterator<Item = R> + Serialize + DeserializeOwned,
-        F: Fn(I::Item) -> O,
-    {
-        if self.is_root() {
-            self.run_as_root(label, work_items, compute)
-        } else {
-            self.run_as_worker(compute);
-            Vec::new()
-        }
     }
 }

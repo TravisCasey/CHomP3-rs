@@ -19,8 +19,8 @@
 //! # Feature Flags
 //!
 //! - **`serde`**: Enables serialization support for core data structures.
-//! - **`mpi`**: Enables MPI-based distributed computation for large cubical
-//!   complexes. Implies `serde`.
+//! - **`chompi`**: Enables MPI-based distributed computation for large cubical
+//!   complexes via the `chompi` crate. Implies `serde`.
 
 #![warn(missing_docs)]
 #![allow(
@@ -34,6 +34,8 @@
 pub use algebra::{
     Additive, AlgebraicBase, Cyclic, HashMapModule, ModuleLike, Multiplicative, RingLike,
 };
+#[cfg(feature = "chompi")]
+pub use chompi::{MpiExecutor, SimpleCommunicator};
 pub use complexes::{
     CellComplex, ComplexLike, Cube, CubeIterator, CubicalComplex, Grader, HashMapGrader, Orthant,
     OrthantIterator, OrthantTrie, TopCubeGrader,
@@ -44,7 +46,42 @@ pub use homology::{
 
 pub mod algebra;
 pub mod complexes;
-pub mod executor;
 pub mod homology;
 mod logging;
 pub mod prelude;
+
+/// Dispatch between feature-gated implementations.
+///
+/// Executes the first branch when the `chompi` feature is enabled,
+/// otherwise executes the fallback branch. This is useful for code that
+/// needs different behavior depending on whether MPI support is available.
+///
+/// # Example
+///
+/// ```ignore
+/// use chomp3rs::dispatch;
+///
+/// dispatch!(
+///     chompi => {
+///         // MPI-enabled code path
+///         run_distributed();
+///     },
+///     _ => {
+///         // Fallback code path
+///         run_sequential();
+///     }
+/// );
+/// ```
+#[macro_export]
+macro_rules! dispatch {
+    (chompi => $chompi:expr,_ => $fallback:expr) => {{
+        #[cfg(feature = "chompi")]
+        {
+            $chompi
+        }
+        #[cfg(not(feature = "chompi"))]
+        {
+            $fallback
+        }
+    }};
+}

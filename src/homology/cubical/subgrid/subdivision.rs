@@ -197,6 +197,18 @@ impl GridSubdivision {
             .collect()
     }
 
+    /// Returns the number of nonempty subgrids.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.nonempty_subgrids.len()
+    }
+
+    /// Returns whether there are no nonempty subgrids.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.nonempty_subgrids.is_empty()
+    }
+
     /// Logs statistics about how many subgrids were filtered.
     fn log_filtering_statistics(&self) {
         let dim = self.minimum_orthant.ambient_dimension() as usize;
@@ -317,9 +329,9 @@ mod tests {
             Some(vec![5, 5]),
             None,
         );
+        assert_eq!(subdivision.len(), 4);
 
         let subgrids: Vec<_> = subdivision.into_iter().collect();
-        assert_eq!(subgrids.len(), 4);
 
         // Check first subgrid
         assert_eq!(subgrids[0].0, Orthant::from([0, 0]));
@@ -421,8 +433,7 @@ mod tests {
             Some(&[]),
         );
 
-        let nonempty: Vec<_> = subdivision.into_iter().collect();
-        assert_eq!(nonempty.len(), 0);
+        assert!(subdivision.is_empty());
     }
 
     #[test]

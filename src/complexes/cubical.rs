@@ -82,8 +82,6 @@ use std::{
 
 pub use graders::{OrthantTrie, TopCubeGrader};
 pub use iterators::{CubeIterator, OrthantIterator};
-#[cfg(feature = "mpi")]
-use mpi::traits::Equivalence;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -100,7 +98,6 @@ mod iterators;
 /// and [`CubicalComplex`] instances) is 32. The interface is otherwise
 /// similar to an array with size fixed after construction.
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "mpi", derive(Equivalence))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Orthant {
     dimension: usize,
@@ -342,7 +339,6 @@ impl Hash for Orthant {
 /// assert_eq!(square.extent(), vec![true, true]); // extent 11
 /// ```
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-#[cfg_attr(feature = "mpi", derive(Equivalence))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Cube {
     base_orthant: Orthant,

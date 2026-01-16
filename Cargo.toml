@@ -12,7 +12,7 @@ categories = ["mathematics"]
 resolver = "3"
 
 [features]
-mpi = ["dep:mpi", "dep:bincode", "serde"]
+chompi = ["dep:chompi", "serde"]
 serde = ["dep:serde"]
 
 [[bench]]
@@ -27,15 +27,14 @@ harness = false
 debug = true
 
 [dependencies]
-bincode = { version = "2.0.1", features = ["serde", "alloc"], optional = true }
+chompi = { path = "chompi", optional = true }
 flint-sys = "0.7.3"
 itertools = "0.14.0"
-mpi = { version = "0.8.0", features = ["derive"], optional = true }
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 tracing = { version = "0.1.41", features = ["log"] }
 
 [workspace]
-members = ["test_utilities"]
+members = ["test_utilities", "chompi"]
 
 [dev-dependencies]
 divan = "0.1.21"
