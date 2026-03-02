@@ -1,18 +1,12 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
-//! Implementation of a cubical complex with more cells than can be explicitly
-//! stored. The cubical complex is comprised of cubes in n-dimensional real
-//! space with vertices on the integer lattice. Cubes of interest are
-//! differentiated by their grade, from the grader provided to the complex.
+//! Cubical complex implementation for high-dimensional spaces.
 //!
-//! The key types are as follows:
-//! - `Orthant`: An interval of cubical cells in the ambient space. See below.
-//! - `Cube`: Represents a cube defined by the base orthant it is in and the
-//!   dual orthant. See below.
-//! - `CubicalComplex`: A complex satisfying the `ComplexLike` trait with `Cube`
-//!   instances as cells.
+//! A [`CubicalComplex`] represents a rectangular grid of cubes in n-dimensional
+//! space with vertices on the integer lattice. Each [`Cube`] is defined by a
+//! base [`Orthant`] and a dual [`Orthant`] encoding which axes the cube extends
+//! along (the extent system).
 //!
 //! ## Orthants
 //!
@@ -42,9 +36,10 @@
 //! # Examples
 //!
 //! ```rust
-//! use chomp3rs::{ComplexLike, Cube, CubicalComplex, Cyclic, HashMapGrader,
-//!     HashMapModule, ModuleLike, Orthant, RingLike};
 //! use std::collections::HashMap;
+//!
+//! use chomp3rs::{Chain, Complex, Cube, CubicalComplex, Cyclic, HashGrader,
+//!     Orthant, Ring};
 //!
 //! // Create orthants and cubes
 //! let vertex = Cube::vertex(Orthant::from([1, 1]));                    // 0D vertex
@@ -58,23 +53,23 @@
 //! let mut grades = HashMap::new();
 //! grades.insert(vertex.clone(), 1);
 //! grades.insert(edge.clone(), 3);
-//! let grader = HashMapGrader::from_map(grades, 0);
+//! let grader = HashGrader::from_map(grades, 0);
 //!
 //! // Create a 2D cubical complex
 //! let min = Orthant::from([0, 0]);
 //! let max = Orthant::from([1, 1]);
-//! let complex: CubicalComplex<HashMapModule<Cube, Cyclic<5>>, _> =
+//! let complex: CubicalComplex<Cyclic<5>, _> =
 //!     CubicalComplex::new(min, max, grader);
 //!
-//! assert_eq!(complex.cell_boundary(&vertex), HashMapModule::new());
-//! assert_eq!(complex.cell_boundary(&edge), HashMapModule::from([(vertex, -Cyclic::one())]));
+//! assert_eq!(complex.cell_boundary(&vertex), Chain::new());
+//! assert_eq!(complex.cell_boundary(&edge), Chain::from([(vertex, -Cyclic::one())]));
 //! ```
 
 use std::{
     cmp::Ordering,
     fmt::{self, Debug, Display, Formatter},
     hash::Hash,
-    iter::{FromIterator, zip},
+    iter::zip,
     marker::PhantomData,
     ops::{Index, IndexMut},
     slice::{Iter, IterMut},
@@ -82,43 +77,53 @@ use std::{
 
 pub use graders::{OrthantTrie, TopCubeGrader};
 pub use iterators::{CubeIterator, OrthantIterator};
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
 
-use crate::{ComplexLike, Grader, ModuleLike, RingLike};
+use crate::{Chain, Complex, Grader, Ring};
 
 mod graders;
 mod iterators;
+
+/// Maximum ambient dimension supported by cubical types.
+///
+/// This limit applies to [`Orthant`], [`Cube`], and [`CubicalComplex`].
+const MAX_DIMENSION: usize = 32;
 
 /// An orthant is an interval of cubical cells in the ambient space between a
 /// vertex and the top-dimensional cube it is a face of that is greater along
 /// each axis. Each [`Cube`] is defined by two `Orthant` instances.
 ///
 /// The maximum ambient dimension of an `Orthant` (as well as that of [`Cube`]
-/// and [`CubicalComplex`] instances) is 32. The interface is otherwise
-/// similar to an array with size fixed after construction.
+/// and [`CubicalComplex`] instances) is [`MAX_DIMENSION`](Self::MAX_DIMENSION).
+/// The interface is otherwise similar to an array with size fixed after
+/// construction.
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "mpi", derive(serde::Serialize, serde::Deserialize))]
 pub struct Orthant {
     dimension: usize,
-    coordinates: [i16; 32],
+    coordinates: [i16; MAX_DIMENSION],
 }
 
 impl Orthant {
+    /// Maximum ambient dimension supported by cubical types.
+    ///
+    /// This limit applies to [`Orthant`], [`Cube`], and [`CubicalComplex`].
+    pub const MAX_DIMENSION: usize = MAX_DIMENSION;
+
     /// Create a new orthant with given coordinates.
     ///
     /// # Panics
-    /// If the length of `coordinates` exceeds 32, which is the maximum ambient
-    /// dimension of `Orthant` instances.
+    /// If the length of `coordinates` exceeds
+    /// [`MAX_DIMENSION`](Self::MAX_DIMENSION).
     #[must_use]
     pub fn new(coordinates: &[i16]) -> Self {
         assert!(
-            coordinates.len() <= 32,
-            "Cubical complex ambient dimension cannot exceed 32, got {}",
+            coordinates.len() <= Self::MAX_DIMENSION,
+            "ambient dimension cannot exceed {}, got {}",
+            Self::MAX_DIMENSION,
             coordinates.len()
         );
-        let mut array_coordinates = [0; 32];
-        array_coordinates.as_mut_slice()[..coordinates.len()].copy_from_slice(coordinates);
+        let mut array_coordinates = [0i16; Self::MAX_DIMENSION];
+        array_coordinates[..coordinates.len()].copy_from_slice(coordinates);
         Self {
             dimension: coordinates.len(),
             coordinates: array_coordinates,
@@ -126,11 +131,19 @@ impl Orthant {
     }
 
     /// Create an orthant with all coordinates set to zero.
+    ///
+    /// # Panics
+    /// If `dimension` exceeds [`MAX_DIMENSION`](Self::MAX_DIMENSION).
     #[must_use]
     pub fn zeros(dimension: usize) -> Self {
+        assert!(
+            dimension <= Self::MAX_DIMENSION,
+            "ambient dimension cannot exceed {}, got {dimension}",
+            Self::MAX_DIMENSION,
+        );
         Self {
             dimension,
-            coordinates: [0; 32],
+            coordinates: [0; Self::MAX_DIMENSION],
         }
     }
 
@@ -147,10 +160,6 @@ impl Orthant {
     }
 
     /// Get a mutable reference to the coordinates as a slice.
-    ///
-    /// # Warning
-    /// Modifying the length of the returned slice may cause unexpected behavior
-    /// and should be avoided. Only modify the values of existing elements.
     pub fn as_mut_slice(&mut self) -> &mut [i16] {
         &mut self.coordinates[..self.dimension]
     }
@@ -182,13 +191,13 @@ impl Index<usize> for Orthant {
     type Output = i16;
 
     fn index(&self, index: usize) -> &Self::Output {
-        &self.coordinates[index]
+        &self.coordinates[..self.dimension][index]
     }
 }
 
 impl IndexMut<usize> for Orthant {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.coordinates[index]
+        &mut self.coordinates[..self.dimension][index]
     }
 }
 
@@ -212,10 +221,16 @@ impl<'a> IntoIterator for &'a mut Orthant {
 
 impl FromIterator<i16> for Orthant {
     fn from_iter<T: IntoIterator<Item = i16>>(iter: T) -> Self {
-        let mut coordinates: [i16; 32] = [0; 32];
+        let mut coordinates = [0i16; Self::MAX_DIMENSION];
         let mut dimension = 0;
-        for (coord, value) in iter.into_iter().enumerate() {
-            coordinates[coord] = value;
+        for (index, value) in iter.into_iter().enumerate() {
+            assert!(
+                index < Self::MAX_DIMENSION,
+                "ambient dimension cannot exceed {}, got at least {}",
+                Self::MAX_DIMENSION,
+                index + 1,
+            );
+            coordinates[index] = value;
             dimension += 1;
         }
 
@@ -338,8 +353,8 @@ impl Hash for Orthant {
 /// assert_eq!(square.dimension(), 2);
 /// assert_eq!(square.extent(), vec![true, true]); // extent 11
 /// ```
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "mpi", derive(serde::Serialize, serde::Deserialize))]
 pub struct Cube {
     base_orthant: Orthant,
     dual_orthant: Orthant,
@@ -355,25 +370,22 @@ impl Cube {
     /// base orthant coordinate or one less.
     #[must_use]
     pub fn new(base_orthant: Orthant, dual_orthant: Orthant) -> Self {
-        #[cfg(debug_assertions)]
-        {
-            assert!(
-                base_orthant.ambient_dimension() == dual_orthant.ambient_dimension(),
-                "Base and dual orthants must have the same dimension: base has dimension {}, dual \
-                 has dimension {}",
-                base_orthant.ambient_dimension(),
-                dual_orthant.ambient_dimension()
-            );
+        assert!(
+            base_orthant.ambient_dimension() == dual_orthant.ambient_dimension(),
+            "Base and dual orthants must have the same dimension: base has dimension {}, dual has \
+             dimension {}",
+            base_orthant.ambient_dimension(),
+            dual_orthant.ambient_dimension()
+        );
 
-            for axis in 0..base_orthant.ambient_dimension() {
-                let base_coord = base_orthant[axis as usize];
-                let dual_coord = dual_orthant[axis as usize];
-                assert!(
-                    dual_coord == base_coord || dual_coord == base_coord - 1,
-                    "Dual orthant coordinate at axis {axis} must equal base coordinate \
-                     {base_coord} or be exactly one less, got dual coordinate {dual_coord}",
-                );
-            }
+        for axis in 0..base_orthant.ambient_dimension() {
+            let base_coord = base_orthant[axis as usize];
+            let dual_coord = dual_orthant[axis as usize];
+            assert!(
+                dual_coord == base_coord || dual_coord == base_coord - 1,
+                "Dual orthant coordinate at axis {axis} must equal base coordinate {base_coord} \
+                 or be exactly one less, got dual coordinate {dual_coord}",
+            );
         }
 
         Self {
@@ -394,16 +406,13 @@ impl Cube {
     /// `extent`.
     #[must_use]
     pub fn from_extent(base_orthant: Orthant, extent: &[bool]) -> Self {
-        #[cfg(debug_assertions)]
-        {
-            assert!(
-                base_orthant.ambient_dimension() == extent.len() as u32,
-                "Base orthant dimension must match extent length: base has dimension {}, extent \
-                 has length {}",
-                base_orthant.ambient_dimension(),
-                extent.len()
-            );
-        }
+        assert!(
+            base_orthant.ambient_dimension() == extent.len() as u32,
+            "Base orthant dimension must match extent length: base has dimension {}, extent has \
+             length {}",
+            base_orthant.ambient_dimension(),
+            extent.len()
+        );
 
         let dual_orthant = zip(base_orthant.iter(), extent.iter())
             .map(|(coord, extends)| if *extends { *coord } else { *coord - 1 })
@@ -420,10 +429,7 @@ impl Cube {
     /// The dual orthant has each coordinate one less than the base orthant.
     #[must_use]
     pub fn vertex(base_orthant: Orthant) -> Self {
-        let mut dual_orthant = base_orthant.clone();
-        for coord in dual_orthant.as_mut_slice() {
-            *coord -= 1;
-        }
+        let dual_orthant = base_orthant.iter().map(|coord| coord - 1).collect();
         Self {
             base_orthant,
             dual_orthant,
@@ -482,11 +488,9 @@ impl Cube {
     /// that axis.
     #[must_use]
     pub fn extent(&self) -> Vec<bool> {
-        let mut result = Vec::with_capacity(self.ambient_dimension() as usize);
-        for (base, dual) in zip(self.base_orthant.iter(), self.dual_orthant.iter()) {
-            result.push(*base == *dual);
-        }
-        result
+        zip(self.base_orthant.iter(), self.dual_orthant.iter())
+            .map(|(base, dual)| base == dual)
+            .collect()
     }
 
     /// Calculate the topological dimension of the cube (number of axes with
@@ -534,9 +538,8 @@ impl Display for Cube {
 ///
 /// # Type Parameters
 ///
-/// - `M`: Module type for representing linear combinations of cubes (namely,
-///   results of `boundary` and `coboundary` calls). Must implement
-///   [`ModuleLike`].
+/// - `R`: Coefficient ring for chains produced by boundary and coboundary
+///   operations. Must implement [`Ring`].
 /// - `G`: Grader type for assigning filtration levels to cubes. All cubes in
 ///   the rectangular region are in this cubical complex; to select a subset of
 ///   these cubes for consideration, grade them lower than ignored cubes. Must
@@ -548,8 +551,7 @@ impl Display for Cube {
 /// use std::collections::HashMap;
 ///
 /// use chomp3rs::{
-///     ComplexLike, Cube, CubicalComplex, Cyclic, HashMapGrader,
-///     HashMapModule, Orthant,
+///     Chain, Complex, Cube, CubicalComplex, Cyclic, HashGrader, Orthant,
 /// };
 ///
 /// // Create a simple 2x2 cubical complex
@@ -560,9 +562,9 @@ impl Display for Cube {
 /// let vertex = Cube::vertex(Orthant::from([1, 1]));
 /// let mut grades = HashMap::new();
 /// grades.insert(vertex.clone(), 5);
-/// let grader = HashMapGrader::from_map(grades, 0);
+/// let grader = HashGrader::from_map(grades, 0);
 ///
-/// let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
+/// let complex: CubicalComplex<Cyclic<7>, _> =
 ///     CubicalComplex::new(min, max, grader);
 ///
 /// // Use the complex for homological computations
@@ -571,14 +573,14 @@ impl Display for Cube {
 /// let boundary = complex.cell_boundary(&vertex);
 /// ```
 #[derive(Clone, Debug)]
-pub struct CubicalComplex<M, G> {
+pub struct CubicalComplex<R, G> {
     minimum_orthant: Orthant,
     maximum_orthant: Orthant,
     grading_function: G,
-    module_type: PhantomData<M>,
+    ring_type: PhantomData<R>,
 }
 
-impl<M, G> CubicalComplex<M, G> {
+impl<R, G> CubicalComplex<R, G> {
     /// Create a new cubical complex with custom grading function.
     ///
     /// # Panics
@@ -610,7 +612,7 @@ impl<M, G> CubicalComplex<M, G> {
             minimum_orthant,
             maximum_orthant,
             grading_function,
-            module_type: PhantomData,
+            ring_type: PhantomData,
         }
     }
 
@@ -645,20 +647,17 @@ impl<M, G> CubicalComplex<M, G> {
     }
 
     /// Return an immutable reference to the grading function.
+    #[must_use]
     pub fn grader(&self) -> &G {
         &self.grading_function
     }
 }
 
-impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> ComplexLike
-    for CubicalComplex<M, G>
-{
+impl<R: Ring, G: Grader<Cube>> Complex for CubicalComplex<R, G> {
     type Cell = Cube;
-    type CellIterator = CubeIterator;
-    type Module = M;
     type Ring = R;
 
-    fn cell_boundary_if(&self, cell: &Cube, predicate: impl Fn(&Cube) -> bool) -> M {
+    fn cell_boundary(&self, cell: &Cube) -> Chain<Cube, R> {
         debug_assert!(
             self.contains_cube(cell),
             "Cube {:?} is not within the complex bounds [{:?}, {:?}]",
@@ -674,7 +673,7 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
             self.ambient_dimension()
         );
 
-        let mut result = M::new();
+        let mut result = Chain::new();
         let mut coef = R::one();
         for (axis, (base_coord, dual_coord)) in
             zip(cell.base().iter(), cell.dual().iter()).enumerate()
@@ -686,17 +685,13 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
                 outer_base[axis] += 1;
                 if *base_coord < self.maximum()[axis] {
                     let outer_cube = Cube::new(outer_base, cell.dual().clone());
-                    if predicate(&outer_cube) {
-                        result.insert_or_add(outer_cube, coef.clone());
-                    }
+                    result.insert_or_add(outer_cube, coef.clone());
                 }
 
                 let mut inner_dual = cell.dual().clone();
                 inner_dual[axis] -= 1;
                 let inner_cube = Cube::new(cell.base().clone(), inner_dual);
-                if predicate(&inner_cube) {
-                    result.insert_or_add(inner_cube, -coef.clone());
-                }
+                result.insert_or_add(inner_cube, -coef.clone());
 
                 coef = -coef;
             }
@@ -705,7 +700,7 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
         result
     }
 
-    fn cell_coboundary_if(&self, cell: &Cube, predicate: impl Fn(&Cube) -> bool) -> M {
+    fn cell_coboundary(&self, cell: &Cube) -> Chain<Cube, R> {
         debug_assert!(
             self.contains_cube(cell),
             "Cube {:?} is not within the complex bounds [{:?}, {:?}]",
@@ -721,7 +716,7 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
             self.ambient_dimension()
         );
 
-        let mut result = M::new();
+        let mut result = Chain::new();
         let mut coef = R::one();
         for (axis, (base_coord, dual_coord)) in
             zip(cell.base().iter(), cell.dual().iter()).enumerate()
@@ -732,17 +727,13 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
                 let mut outer_dual = cell.dual().clone();
                 outer_dual[axis] += 1;
                 let outer_cube = Cube::new(cell.base().clone(), outer_dual);
-                if predicate(&outer_cube) {
-                    result.insert_or_add(outer_cube, coef.clone());
-                }
+                result.insert_or_add(outer_cube, coef.clone());
 
                 let mut inner_base = cell.base().clone();
                 inner_base[axis] -= 1;
                 if *base_coord > self.minimum()[axis] {
                     let inner_cube = Cube::new(inner_base, cell.dual().clone());
-                    if predicate(&inner_cube) {
-                        result.insert_or_add(inner_cube, -coef.clone());
-                    }
+                    result.insert_or_add(inner_cube, -coef.clone());
                 }
 
                 coef = -coef;
@@ -752,7 +743,7 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
         result
     }
 
-    fn iter(&self) -> Self::CellIterator {
+    fn iter(&self) -> impl Iterator<Item = Cube> {
         CubeIterator::new(self.minimum_orthant.clone(), self.maximum_orthant.clone())
     }
 
@@ -765,13 +756,13 @@ impl<R: RingLike, M: ModuleLike<Cell = Cube, Ring = R>, G: Grader<Cube>> Complex
     }
 }
 
-impl<M, G: Grader<Cube>> Grader<Cube> for CubicalComplex<M, G> {
+impl<R, G: Grader<Cube>> Grader<Cube> for CubicalComplex<R, G> {
     fn grade(&self, cell: &Cube) -> u32 {
         self.grading_function.grade(cell)
     }
 }
 
-impl<M, G: Grader<Orthant>> Grader<Orthant> for CubicalComplex<M, TopCubeGrader<G>> {
+impl<R, G: Grader<Orthant>> Grader<Orthant> for CubicalComplex<R, TopCubeGrader<G>> {
     fn grade(&self, cell: &Orthant) -> u32 {
         self.grading_function.grade(cell)
     }
@@ -782,10 +773,24 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{Cyclic, HashMapGrader, HashMapModule, ModuleLike, TopCubeGrader};
+    use crate::{Cyclic, HashGrader, Ring, TopCubeGrader};
+
+    /// Build the 2D graded cubical complex used by several tests.
+    ///
+    /// The complex spans `[0,0]` to `[2,2]` with orthant grades:
+    /// `(0,0)→4`, `(1,0)→2`, `(0,1)→3`, `(1,1)→1`.
+    fn create_2d_graded_complex() -> CubicalComplex<Cyclic<7>, TopCubeGrader<HashGrader<Orthant>>> {
+        let mut orthant_grades = HashMap::new();
+        orthant_grades.insert(Orthant::from([0, 0]), 4);
+        orthant_grades.insert(Orthant::from([1, 0]), 2);
+        orthant_grades.insert(Orthant::from([0, 1]), 3);
+        orthant_grades.insert(Orthant::from([1, 1]), 1);
+        let grader = TopCubeGrader::new(HashGrader::from_map(orthant_grades, 0), Some(1));
+        CubicalComplex::new(Orthant::from([0, 0]), Orthant::from([2, 2]), grader)
+    }
 
     #[test]
-    fn test_orthant_creation_and_access() {
+    fn orthant_creation_and_access() {
         // Test creation and basic access methods
         let orthant = Orthant::new(&[1, 2, 3]);
         assert_eq!(orthant.ambient_dimension(), 3);
@@ -807,7 +812,7 @@ mod tests {
     }
 
     #[test]
-    fn test_orthant_mutation() {
+    fn orthant_mutation() {
         let mut orthant = Orthant::from([1, 2, 3]);
 
         // Test IndexMut
@@ -833,7 +838,7 @@ mod tests {
     }
 
     #[test]
-    fn test_orthant_from_traits() {
+    fn orthant_from_traits() {
         let arr = [1, 2, 3];
         let orthant1: Orthant = arr.into();
         assert_eq!(orthant1.as_slice(), &[1, 2, 3]);
@@ -854,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cube_creation_and_properties() {
+    fn cube_creation_and_properties() {
         let base = Orthant::from([1, 1]);
         let dual = Orthant::from([1, 0]);
         let cube = Cube::new(base, dual);
@@ -876,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cube_constructors() {
+    fn cube_constructors() {
         let base = Orthant::from([1, 2, 3]);
 
         let vertex = Cube::vertex(base.clone());
@@ -897,7 +902,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cube_extent_patterns() {
+    fn cube_extent_patterns() {
         // Test all possible extent patterns in 2D
         let base = Orthant::from([2, 3]);
 
@@ -917,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cubical_complex_creation() {
+    fn cubical_complex_creation() {
         let min = Orthant::from([0, 0]);
         let max = Orthant::from([2, 2]);
 
@@ -926,10 +931,9 @@ mod tests {
         let mut cell_grades = HashMap::new();
         cell_grades.insert(vertex.clone(), 1);
         cell_grades.insert(edge.clone(), 3);
-        let grader = HashMapGrader::from_map(cell_grades, 5);
+        let grader = HashGrader::from_map(cell_grades, 5);
 
-        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
-            CubicalComplex::new(min, max, grader);
+        let complex: CubicalComplex<Cyclic<7>, _> = CubicalComplex::new(min, max, grader);
 
         assert_eq!(complex.ambient_dimension(), 2);
 
@@ -947,27 +951,15 @@ mod tests {
     }
 
     #[test]
-    fn test_boundary_and_coboundary() {
-        let min = Orthant::from([0, 0]);
-        let max = Orthant::from([2, 2]);
-
-        // Create orthant grader for surrounding top cube grader
-        let mut orthant_grades = HashMap::new();
-        orthant_grades.insert(Orthant::from([0, 0]), 4);
-        orthant_grades.insert(Orthant::from([1, 0]), 2);
-        orthant_grades.insert(Orthant::from([0, 1]), 3);
-        orthant_grades.insert(Orthant::from([1, 1]), 1);
-        let grader = TopCubeGrader::new(HashMapGrader::from_map(orthant_grades, 0), Some(1));
-
-        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
-            CubicalComplex::new(min, max, grader);
+    fn boundary_and_coboundary() {
+        let complex = create_2d_graded_complex();
 
         // Test boundary of a 1-cube (edge) - horizontal edge
         let edge = Cube::from_extent(Orthant::from([1, 1]), &[true, false]);
         let boundary = complex.cell_boundary(&edge);
         assert_eq!(
             boundary,
-            HashMapModule::from([
+            Chain::from([
                 (Cube::vertex(Orthant::from([2, 1])), Cyclic::one()),
                 (Cube::vertex(Orthant::from([1, 1])), -Cyclic::one())
             ])
@@ -978,7 +970,7 @@ mod tests {
         let coboundary = complex.cell_coboundary(&vertex);
         assert_eq!(
             coboundary,
-            HashMapModule::from([
+            Chain::from([
                 (
                     Cube::new(Orthant::from([1, 1]), Orthant::from([1, 0])),
                     Cyclic::one()
@@ -999,26 +991,24 @@ mod tests {
         );
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "Base and dual orthants must have the same dimension")]
-    fn test_cube_dimension_mismatch_panic() {
+    fn cube_dimension_mismatch_panic() {
         let base = Orthant::from([0, 0]);
         let dual = Orthant::from([1, 0, 0]); // Different dimension
         let _cube = Cube::new(base, dual); // Should panic
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "Base orthant dimension must match extent length")]
-    fn test_from_extent_dimension_mismatch() {
+    fn from_extent_dimension_mismatch() {
         let base = Orthant::from([1, 2]);
         let extent = &[true, false, true]; // Different length
         let _cube = Cube::from_extent(base, extent);
     }
 
     #[test]
-    fn test_comprehensive_3d_system() {
+    fn comprehensive_3d_system() {
         // Comprehensive test of 3D cubical system
         let min = Orthant::from([0, 0, 0]);
         let max = Orthant::from([2, 2, 2]);
@@ -1033,10 +1023,9 @@ mod tests {
         orthant_grades.insert(Orthant::from([1, 0, 1]), 4);
         orthant_grades.insert(Orthant::from([0, 1, 1]), 2);
         orthant_grades.insert(Orthant::from([1, 1, 1]), 9);
-        let grader = TopCubeGrader::new(HashMapGrader::from_map(orthant_grades, 0), Some(1));
+        let grader = TopCubeGrader::new(HashGrader::from_map(orthant_grades, 0), Some(1));
 
-        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
-            CubicalComplex::new(min, max, grader);
+        let complex: CubicalComplex<Cyclic<7>, _> = CubicalComplex::new(min, max, grader);
 
         // Test vertex (0-cube)
         let vertex = Cube::vertex(Orthant::from([1, 1, 1]));
@@ -1067,8 +1056,8 @@ mod tests {
         assert_eq!(complex.grade(&cube_3d), 9); // Direct grade from orthant (1,1,1)
 
         // Test boundary relations (vertex has empty boundary)
-        let vertex_boundary: HashMapModule<Cube, Cyclic<7>> = complex.cell_boundary(&vertex);
-        assert_eq!(vertex_boundary, HashMapModule::new());
+        let vertex_boundary = complex.cell_boundary(&vertex);
+        assert_eq!(vertex_boundary, Chain::new());
 
         // Test that all cubes are contained
         assert!(complex.contains_cube(&vertex));
@@ -1138,38 +1127,20 @@ mod tests {
     }
 
     #[test]
-    fn test_chain_boundary_computation() {
-        let min = Orthant::from([0, 0]);
-        let max = Orthant::from([2, 2]);
+    fn chain_boundary_computation() {
+        let complex = create_2d_graded_complex();
 
-        // Create orthant grader for TopCubeGrader
-        let mut orthant_grades = HashMap::new();
-        orthant_grades.insert(Orthant::from([0, 0]), 4);
-        orthant_grades.insert(Orthant::from([1, 0]), 2);
-        orthant_grades.insert(Orthant::from([0, 1]), 3);
-        orthant_grades.insert(Orthant::from([1, 1]), 1);
-        let grader = TopCubeGrader::new(HashMapGrader::from_map(orthant_grades, 0), Some(1));
-
-        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
-            CubicalComplex::new(min, max, grader);
-
-        // Create a chain that is a linear combination of edges:
-        // 2 * horizontal_edge + 3 * vertical_edge
+        // Create a chain: 2 * horizontal_edge + 3 * vertical_edge
         let horizontal_edge = Cube::from_extent(Orthant::from([1, 1]), &[true, false]);
         let vertical_edge = Cube::from_extent(Orthant::from([1, 1]), &[false, true]);
 
-        let mut edge_chain = HashMapModule::new();
+        let mut edge_chain: Chain<Cube, Cyclic<7>> = Chain::new();
         edge_chain.insert_or_add(horizontal_edge, Cyclic::from(2));
         edge_chain.insert_or_add(vertical_edge, Cyclic::from(3));
 
-        // Compute boundary of the chain using BoundaryComputer trait
         let chain_boundary = complex.boundary(&edge_chain);
 
-        // Expected boundary:
-        // 2 * boundary(horizontal_edge) + 3 * boundary(vertical_edge)
-        // = 2 * (vertex(2,1) - vertex(1,1)) + 3 * (vertex(1,2) - vertex(1,1))
-        // = 2*vertex(2,1) - 2*vertex(1,1) + 3*vertex(1,2) - 3*vertex(1,1)
-        // = 2*vertex(2,1) + 3*vertex(1,2) - 5*vertex(1,1)
+        // Expected: 2*vertex(2,1) + 3*vertex(1,2) - 5*vertex(1,1)
         let vertex_11 = Cube::vertex(Orthant::from([1, 1]));
         let vertex_21 = Cube::vertex(Orthant::from([2, 1]));
         let vertex_12 = Cube::vertex(Orthant::from([1, 2]));
@@ -1180,119 +1151,77 @@ mod tests {
     }
 
     #[test]
-    fn test_chain_coboundary_computation() {
-        let min = Orthant::from([0, 0]);
-        let max = Orthant::from([2, 2]);
+    fn chain_coboundary_computation() {
+        let complex = create_2d_graded_complex();
 
-        // Create orthant grader for TopCubeGrader
-        let mut orthant_grades = HashMap::new();
-        orthant_grades.insert(Orthant::from([0, 0]), 4);
-        orthant_grades.insert(Orthant::from([1, 0]), 2);
-        orthant_grades.insert(Orthant::from([0, 1]), 3);
-        orthant_grades.insert(Orthant::from([1, 1]), 1);
-        let grader = TopCubeGrader::new(HashMapGrader::from_map(orthant_grades, 0), Some(1));
-
-        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
-            CubicalComplex::new(min, max, grader);
-
-        // Create a chain that is a linear combination of vertices:
-        // vertex(1,1) + 2*vertex(1,2) - vertex(2,1)
+        // Create a chain: vertex(1,1) + 2*vertex(1,2) - vertex(2,1)
         let vertex_11 = Cube::vertex(Orthant::from([1, 1]));
         let vertex_12 = Cube::vertex(Orthant::from([1, 2]));
         let vertex_21 = Cube::vertex(Orthant::from([2, 1]));
 
-        let mut vertex_chain = HashMapModule::new();
+        let mut vertex_chain: Chain<Cube, Cyclic<7>> = Chain::new();
         vertex_chain.insert_or_add(vertex_11, Cyclic::one());
         vertex_chain.insert_or_add(vertex_12, Cyclic::from(2));
         vertex_chain.insert_or_add(vertex_21, -Cyclic::one());
 
-        // Compute coboundary of the chain using CoboundaryComputer trait
         let chain_coboundary = complex.coboundary(&vertex_chain);
 
-        // The coboundary should be a linear combination of edges that have these
-        // vertices as faces. We expect edges connecting these vertices to
-        // appear with appropriate coefficients based on the chain coefficients
-        // and orientations.
-
-        // Check that some specific edges appear in the coboundary
+        // Coboundary should contain edges incident to these vertices
         let horizontal_edge = Cube::from_extent(Orthant::from([1, 1]), &[true, false]);
         let vertical_edge = Cube::from_extent(Orthant::from([1, 1]), &[false, true]);
 
-        // The exact coefficients depend on the specific orientations and combinations,
-        // but we can verify that the coboundary is non-empty and contains expected
-        // edges
-        let coboundary_vertices: Vec<_> = chain_coboundary
+        let coboundary_cells: Vec<_> = chain_coboundary
             .iter()
             .map(|(cube, _)| cube.clone())
             .collect();
-        assert!(!coboundary_vertices.is_empty());
-
-        // At least one of the expected edges should be in the coboundary
-        let contains_expected_edges = coboundary_vertices.contains(&horizontal_edge)
-            || coboundary_vertices.contains(&vertical_edge);
-        assert!(contains_expected_edges);
+        assert!(!coboundary_cells.is_empty());
+        assert!(
+            coboundary_cells.contains(&horizontal_edge)
+                || coboundary_cells.contains(&vertical_edge)
+        );
     }
 
     #[test]
-    fn test_cell_boundary_if_with_predicate() {
-        let min = Orthant::from([0, 0]);
-        let max = Orthant::from([2, 2]);
+    fn filtered_cell_boundary() {
+        let complex = create_2d_graded_complex();
 
-        let mut orthant_grades = HashMap::new();
-        orthant_grades.insert(Orthant::from([0, 0]), 4);
-        orthant_grades.insert(Orthant::from([1, 0]), 2);
-        orthant_grades.insert(Orthant::from([0, 1]), 3);
-        orthant_grades.insert(Orthant::from([1, 1]), 1);
-        let grader = TopCubeGrader::new(HashMapGrader::from_map(orthant_grades, 0), Some(1));
-
-        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
-            CubicalComplex::new(min, max, grader);
-
-        // Test boundary of horizontal edge with predicate that only includes vertices
-        // at x=1
+        // Boundary of horizontal edge, filtered to vertices at x=1
         let horizontal_edge = Cube::from_extent(Orthant::from([1, 1]), &[true, false]);
-        let boundary_filtered =
-            complex.cell_boundary_if(&horizontal_edge, |cube| cube.base()[0] == 1);
+        let boundary_filtered: Chain<Cube, Cyclic<7>> = complex
+            .cell_boundary(&horizontal_edge)
+            .into_iter()
+            .filter(|(cube, _)| cube.base()[0] == 1)
+            .collect();
 
-        // Only vertex(1,1) should be included, not vertex(2,1)
         let vertex_11 = Cube::vertex(Orthant::from([1, 1]));
-        let mut expected = HashMapModule::new();
+        let mut expected = Chain::new();
         expected.insert_or_add(vertex_11, -Cyclic::one());
 
         assert_eq!(boundary_filtered, expected);
     }
 
     #[test]
-    fn test_boundary_if_with_predicate() {
-        let min = Orthant::from([0, 0]);
-        let max = Orthant::from([2, 2]);
-
-        let mut orthant_grades = HashMap::new();
-        orthant_grades.insert(Orthant::from([0, 0]), 4);
-        orthant_grades.insert(Orthant::from([1, 0]), 2);
-        orthant_grades.insert(Orthant::from([0, 1]), 3);
-        orthant_grades.insert(Orthant::from([1, 1]), 1);
-        let grader = TopCubeGrader::new(HashMapGrader::from_map(orthant_grades, 0), Some(1));
-
-        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
-            CubicalComplex::new(min, max, grader);
+    fn filtered_boundary() {
+        let complex = create_2d_graded_complex();
 
         let horizontal_edge = Cube::from_extent(Orthant::from([1, 1]), &[true, false]);
         let vertical_edge = Cube::from_extent(Orthant::from([1, 1]), &[false, true]);
 
-        let mut edge_chain = HashMapModule::new();
+        let mut edge_chain: Chain<Cube, Cyclic<7>> = Chain::new();
         edge_chain.insert_or_add(horizontal_edge, Cyclic::one());
         edge_chain.insert_or_add(vertical_edge, Cyclic::one());
 
-        // Compute boundary with predicate that only includes vertices with y=1
-        let boundary_filtered = complex.boundary_if(&edge_chain, |cube| cube.base()[1] == 1);
+        // Compute boundary, then filter to vertices with y=1
+        let boundary_filtered: Chain<Cube, Cyclic<7>> = complex
+            .boundary(&edge_chain)
+            .into_iter()
+            .filter(|(cube, _)| cube.base()[1] == 1)
+            .collect();
 
-        // Should include vertex(1,1) from both edges and vertex(2,1) from horizontal
-        // edge
         let vertex_11 = Cube::vertex(Orthant::from([1, 1]));
         let vertex_21 = Cube::vertex(Orthant::from([2, 1]));
 
-        let mut expected = HashMapModule::new();
+        let mut expected = Chain::new();
         expected.insert_or_add(vertex_11, Cyclic::from(5)); // -1 + -1 = -2 = 5 (mod 7)
         expected.insert_or_add(vertex_21, Cyclic::one());
 
@@ -1300,35 +1229,24 @@ mod tests {
     }
 
     #[test]
-    fn test_cell_coboundary_if_with_predicate() {
-        let min = Orthant::from([0, 0]);
-        let max = Orthant::from([2, 2]);
+    fn filtered_cell_coboundary() {
+        let complex = create_2d_graded_complex();
 
-        let mut orthant_grades = HashMap::new();
-        orthant_grades.insert(Orthant::from([0, 0]), 4);
-        orthant_grades.insert(Orthant::from([1, 0]), 2);
-        orthant_grades.insert(Orthant::from([0, 1]), 3);
-        orthant_grades.insert(Orthant::from([1, 1]), 1);
-        let grader = TopCubeGrader::new(HashMapGrader::from_map(orthant_grades, 0), Some(1));
-
-        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
-            CubicalComplex::new(min, max, grader);
-
-        // Test coboundary of vertex with predicate that only includes horizontal edges
+        // Coboundary of vertex, filtered to only horizontal edges
         let vertex = Cube::vertex(Orthant::from([1, 1]));
-        let coboundary_filtered =
-            complex.cell_coboundary_if(&vertex, |cube| cube.extent() == vec![true, false]);
+        let coboundary_filtered: Chain<Cube, Cyclic<7>> = complex
+            .cell_coboundary(&vertex)
+            .into_iter()
+            .filter(|(cube, _)| cube.extent() == vec![true, false])
+            .collect();
 
-        // Should only include horizontal edges that have this vertex as a face
         let horizontal_edge1 = Cube::new(Orthant::from([1, 1]), Orthant::from([1, 0]));
         let horizontal_edge2 = Cube::new(Orthant::from([0, 1]), Orthant::from([0, 0]));
 
-        // Check that only horizontal edges are included
-        for (cube, _) in coboundary_filtered.iter() {
+        for (cube, _) in &coboundary_filtered {
             assert_eq!(cube.extent(), vec![true, false]);
         }
 
-        // Should contain at least the expected horizontal edges
         assert!(
             coboundary_filtered.coefficient(&horizontal_edge1) != Cyclic::zero()
                 || coboundary_filtered.coefficient(&horizontal_edge2) != Cyclic::zero()
@@ -1336,38 +1254,39 @@ mod tests {
     }
 
     #[test]
-    fn test_coboundary_if_with_predicate() {
-        let min = Orthant::from([0, 0]);
-        let max = Orthant::from([2, 2]);
-
-        let mut orthant_grades = HashMap::new();
-        orthant_grades.insert(Orthant::from([0, 0]), 4);
-        orthant_grades.insert(Orthant::from([1, 0]), 2);
-        orthant_grades.insert(Orthant::from([0, 1]), 3);
-        orthant_grades.insert(Orthant::from([1, 1]), 1);
-        let grader = TopCubeGrader::new(HashMapGrader::from_map(orthant_grades, 0), Some(1));
-
-        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
-            CubicalComplex::new(min, max, grader);
+    fn filtered_coboundary() {
+        let complex = create_2d_graded_complex();
 
         let vertex_11 = Cube::vertex(Orthant::from([1, 1]));
         let vertex_21 = Cube::vertex(Orthant::from([2, 1]));
 
-        let mut vertex_chain = HashMapModule::new();
+        let mut vertex_chain: Chain<Cube, Cyclic<7>> = Chain::new();
         vertex_chain.insert_or_add(vertex_11, Cyclic::one());
         vertex_chain.insert_or_add(vertex_21, Cyclic::one());
 
-        // Compute coboundary with predicate that only includes vertical edges
-        let coboundary_filtered =
-            complex.coboundary_if(&vertex_chain, |cube| cube.extent() == vec![false, true]);
+        // Compute coboundary, then filter to only vertical edges
+        let coboundary_filtered: Chain<Cube, Cyclic<7>> = complex
+            .coboundary(&vertex_chain)
+            .into_iter()
+            .filter(|(cube, _)| cube.extent() == vec![false, true])
+            .collect();
 
-        // Check that only vertical edges are included in the result
-        for (cube, _) in coboundary_filtered.iter() {
+        for (cube, _) in &coboundary_filtered {
             assert_eq!(cube.extent(), vec![false, true]);
         }
 
-        // The result should be non-empty since these vertices should have vertical
-        // edges in their coboundaries
-        assert!(coboundary_filtered != HashMapModule::new());
+        assert!(coboundary_filtered != Chain::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "ambient dimension cannot exceed")]
+    fn zeros_dimension_overflow() {
+        let _orthant = Orthant::zeros(Orthant::MAX_DIMENSION + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "ambient dimension cannot exceed")]
+    fn from_iter_dimension_overflow() {
+        let _orthant: Orthant = (0..=Orthant::MAX_DIMENSION).map(|i| i as i16).collect();
     }
 }

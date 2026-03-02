@@ -1,6 +1,5 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 //! Internal progress tracking utilities for long-running operations.
 
@@ -41,16 +40,16 @@ impl ProgressTracker {
         }
     }
 
-    /// Set the logging interval as a percentage (minimum one percent).
+    /// Set the logging interval as a percentage (clamped to `1..=100`).
     #[must_use]
     pub(crate) fn with_interval(mut self, percent: usize) -> Self {
-        self.interval_percent = percent.max(1);
+        self.interval_percent = percent.clamp(1, 100);
         self
     }
 
     /// Set the tracing log level (default: INFO).
     #[must_use]
-    #[expect(dead_code)]
+    #[cfg_attr(not(feature = "mpi"), expect(dead_code))]
     pub(crate) fn with_level(mut self, level: Level) -> Self {
         self.level = level;
         self
@@ -63,26 +62,34 @@ impl ProgressTracker {
 
     /// Increment progress by a custom amount.
     pub(crate) fn increment_by(&mut self, n: usize) {
-        self.current += n;
+        self.current = (self.current + n).min(self.total);
         self.maybe_log();
     }
 
     /// Set progress to a specific count.
     pub(crate) fn set(&mut self, count: usize) {
-        self.current = count;
+        self.current = count.min(self.total);
         self.maybe_log();
     }
 
-    /// Force a final progress log message.
+    /// Log final progress and mark the tracker as complete.
+    ///
+    /// Emits a 100% completion message unconditionally (unless `total` is
+    /// zero). Subsequent calls to `increment`, `increment_by`, `set`, or
+    /// `finish` are no-ops.
     pub(crate) fn finish(&mut self) {
-        if !self.done {
-            self.done = true;
-            self.maybe_log();
+        if self.done {
+            return;
+        }
+        self.current = self.total;
+        self.done = true;
+        if self.total > 0 {
+            self.log_progress(100, "done");
         }
     }
 
     fn maybe_log(&mut self) {
-        if self.total == 0 {
+        if self.done || self.total == 0 {
             return;
         }
 
@@ -90,12 +97,9 @@ impl ProgressTracker {
         let threshold = self.last_logged_percent + self.interval_percent;
 
         if percent >= threshold {
-            if self.done {
-                return;
-            } else if self.current >= self.total {
+            if self.current >= self.total {
                 self.done = true;
             }
-
             let eta = self.calculate_eta();
             self.log_progress(percent, &eta);
             self.last_logged_percent = percent - (percent % self.interval_percent);
@@ -186,23 +190,103 @@ mod tests {
     }
 
     #[test]
-    fn progress_tracker_increment() {
-        let mut tracker = ProgressTracker::new("test", 100);
-        assert_eq!(tracker.current, 0);
-
-        tracker.increment();
-        assert_eq!(tracker.current, 1);
-
-        tracker.increment_by(10);
-        assert_eq!(tracker.current, 11);
-
-        tracker.set(50);
-        assert_eq!(tracker.current, 50);
+    fn increment_and_set() {
+        let mut t = ProgressTracker::new("test", 100);
+        assert_eq!(t.current, 0);
+        t.increment();
+        assert_eq!(t.current, 1);
+        t.increment_by(10);
+        assert_eq!(t.current, 11);
+        t.set(50);
+        assert_eq!(t.current, 50);
     }
 
     #[test]
-    fn progress_tracker_interval_clamped() {
-        let tracker = ProgressTracker::new("test", 100).with_interval(0);
-        assert_eq!(tracker.interval_percent, 1);
+    fn increment_by_clamps_to_total() {
+        let mut t = ProgressTracker::new("test", 100);
+        t.increment_by(200);
+        assert_eq!(t.current, 100);
+    }
+
+    #[test]
+    fn set_clamps_to_total() {
+        let mut t = ProgressTracker::new("test", 100);
+        t.set(999);
+        assert_eq!(t.current, 100);
+    }
+
+    #[test]
+    fn interval_clamps_to_valid_range() {
+        assert_eq!(
+            ProgressTracker::new("t", 100)
+                .with_interval(0)
+                .interval_percent,
+            1
+        );
+        assert_eq!(
+            ProgressTracker::new("t", 100)
+                .with_interval(200)
+                .interval_percent,
+            100
+        );
+        assert_eq!(
+            ProgressTracker::new("t", 100)
+                .with_interval(50)
+                .interval_percent,
+            50
+        );
+    }
+
+    #[test]
+    fn finish_sets_done_and_current() {
+        let mut t = ProgressTracker::new("test", 100);
+        t.increment_by(50);
+        t.finish();
+        assert!(t.done);
+        assert_eq!(t.current, 100);
+    }
+
+    #[test]
+    fn finish_is_idempotent() {
+        let mut t = ProgressTracker::new("test", 10);
+        t.finish();
+        assert!(t.done);
+        assert_eq!(t.current, 10);
+        t.finish();
+        assert!(t.done);
+        assert_eq!(t.current, 10);
+    }
+
+    #[test]
+    fn zero_total_does_not_panic() {
+        let mut t = ProgressTracker::new("test", 0);
+        t.increment();
+        t.increment_by(5);
+        t.set(10);
+        t.finish();
+        assert!(t.done);
+    }
+
+    #[test]
+    fn threshold_crossing_updates_last_logged() {
+        let mut t = ProgressTracker::new("test", 100).with_interval(10);
+        t.increment_by(5);
+        assert_eq!(t.last_logged_percent, 0); // 5% < 10% threshold
+        t.increment_by(5);
+        assert_eq!(t.last_logged_percent, 10); // 10% crosses threshold
+        t.increment_by(5);
+        assert_eq!(t.last_logged_percent, 10); // 15% < 20% threshold
+        t.increment_by(10);
+        assert_eq!(t.last_logged_percent, 20); // 25% crosses 20% threshold, aligns to 20
+    }
+
+    #[test]
+    fn done_prevents_further_logging() {
+        let mut t = ProgressTracker::new("test", 100).with_interval(10);
+        t.finish();
+        let logged = t.last_logged_percent;
+        // done is set, so increment_by is a no-op for logging
+        t.increment_by(50);
+        assert_eq!(t.last_logged_percent, logged);
     }
 }

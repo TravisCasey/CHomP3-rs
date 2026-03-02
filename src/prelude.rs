@@ -1,21 +1,30 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
-//! Convenient re-exports for common types and traits.
+//! Ergonomic re-exports for common types and traits.
 //!
-//! This module provides a single import for the most commonly used items in
-//! `chomp3rs`. Use it with a glob import:
+//! This prelude provides a single glob import for the core types and traits
+//! needed in a typical `chomp3rs` workflow: constructing complexes, computing
+//! Morse matchings, and inspecting results. It mirrors the crate root
+//! re-exports.
+//!
+//! Specialized types like [`CubeIterator`](crate::complexes::CubeIterator)
+//! and [`OrthantIterator`](crate::complexes::OrthantIterator) are not
+//! included; import them from [`complexes`](crate::complexes) when needed.
+//! Feature-gated items (e.g., `mpi`) are also excluded.
 //!
 //! ```
 //! use chomp3rs::prelude::*;
 //! ```
 
 pub use crate::{
-    algebra::{Cyclic, HashMapModule, ModuleLike, RingLike},
+    algebra::{Chain, Cyclic, F2, OrderedChain, Ring},
     complexes::{
-        CellComplex, ComplexLike, Cube, CubicalComplex, Grader, HashMapGrader, Orthant,
-        OrthantTrie, TopCubeGrader,
+        CellComplex, Complex, Cube, CubicalComplex, Grader, HashGrader, Orthant, OrthantTrie,
+        TopCubeGrader,
     },
-    homology::{CellMatch, CoreductionMatching, MorseMatching, TopCubicalMatching},
+    homology::{
+        CellMatch, CoreductionMatching, MorseMatching, TopCubicalMatching,
+        TopCubicalMatchingBuilder,
+    },
 };

@@ -1,6 +1,5 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 //! Efficient algorithms for high-dimensional homology computation using
 //! discrete Morse theory.
@@ -18,27 +17,16 @@
 //!
 //! # Feature Flags
 //!
-//! - **`serde`**: Enables serialization support for core data structures.
-//! - **`chompi`**: Enables MPI-based distributed computation for large cubical
-//!   complexes via the `chompi` crate. Implies `serde`.
+//! - **`mpi`**: Enables MPI-based distributed computation for large cubical
+//!   complexes. Requires serde bounds on generic type parameters.
 
 #![warn(missing_docs)]
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::unreadable_literal
-)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
-pub use algebra::{
-    Additive, AlgebraicBase, Cyclic, HashMapModule, ModuleLike, Multiplicative, RingLike,
-};
-#[cfg(feature = "chompi")]
-pub use chompi::{MpiExecutor, SimpleCommunicator};
+pub use algebra::{Chain, Cyclic, F2, OrderedChain, Ring};
 pub use complexes::{
-    CellComplex, ComplexLike, Cube, CubeIterator, CubicalComplex, Grader, HashMapGrader, Orthant,
-    OrthantIterator, OrthantTrie, TopCubeGrader,
+    CellComplex, Complex, Cube, CubicalComplex, Grader, HashGrader, Orthant, OrthantTrie,
+    TopCubeGrader,
 };
 pub use homology::{
     CellMatch, CoreductionMatching, MorseMatching, TopCubicalMatching, TopCubicalMatchingBuilder,
@@ -47,12 +35,16 @@ pub use homology::{
 pub mod algebra;
 pub mod complexes;
 pub mod homology;
-mod logging;
+pub(crate) mod logging;
+#[cfg(feature = "mpi")]
+pub mod mpi;
 pub mod prelude;
+#[cfg(test)]
+mod test_complexes;
 
-/// Dispatch between feature-gated implementations.
+/// Dispatch between MPI and non-MPI code paths.
 ///
-/// Executes the first branch when the `chompi` feature is enabled,
+/// Executes the first branch when the `mpi` feature is enabled,
 /// otherwise executes the fallback branch. This is useful for code that
 /// needs different behavior depending on whether MPI support is available.
 ///
@@ -62,7 +54,7 @@ pub mod prelude;
 /// use chomp3rs::dispatch;
 ///
 /// dispatch!(
-///     chompi => {
+///     mpi => {
 ///         // MPI-enabled code path
 ///         run_distributed();
 ///     },
@@ -74,12 +66,12 @@ pub mod prelude;
 /// ```
 #[macro_export]
 macro_rules! dispatch {
-    (chompi => $chompi:expr,_ => $fallback:expr) => {{
-        #[cfg(feature = "chompi")]
+    (mpi => $mpi:expr,_ => $fallback:expr) => {{
+        #[cfg(feature = "mpi")]
         {
-            $chompi
+            $mpi
         }
-        #[cfg(not(feature = "chompi"))]
+        #[cfg(not(feature = "mpi"))]
         {
             $fallback
         }

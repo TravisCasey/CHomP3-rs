@@ -1,7 +1,8 @@
-//! Benchmarks for homology on rotated T^2 datasets.
+//! Benchmarks for homology on rotated S^1 datasets.
 //!
-//! Cases are curated to represent the key strategy tradeoffs while avoiding an
-//! overly large Cartesian benchmark matrix.
+//! The suite is intentionally compact and scenario-driven. Cases are selected
+//! to capture the most relevant tradeoffs without an exhaustive Cartesian
+//! product over every dimension/flag.
 
 mod common;
 
@@ -12,13 +13,13 @@ fn main() {
     divan::main();
 }
 
-/// Expected Betti numbers for T^2: b0=1, b1=2, b2=1.
-const TORUS_BETTI: [usize; 3] = [1, 2, 1];
+/// Expected Betti numbers for S^1: b0=1, b1=1.
+const S1_BETTI: [usize; 2] = [1, 1];
 
 const CASES: &[Scenario] = &[
     Scenario {
         label: "low_dim_unfiltered_full",
-        dim: 4,
+        dim: 3,
         config: MatchingConfig {
             filtered: false,
             subgrid_size: 1,
@@ -27,7 +28,7 @@ const CASES: &[Scenario] = &[
     },
     Scenario {
         label: "low_dim_filtered_full",
-        dim: 4,
+        dim: 3,
         config: MatchingConfig {
             filtered: true,
             subgrid_size: 1,
@@ -54,29 +55,29 @@ const CASES: &[Scenario] = &[
     },
 ];
 
-fn bench_torus<G: UniformGrader<Orthant>>(bencher: divan::Bencher, scenario: Scenario) {
-    let path = format!("data/torus/dim{}.csv", scenario.dim);
+fn bench_s1<G: UniformGrader<Orthant>>(bencher: divan::Bencher, scenario: Scenario) {
+    let path = format!("data/s1/dim{}.csv", scenario.dim);
     let orthants = load_orthants(&path);
     run_matching_bench::<G>(
         bencher,
         &orthants,
         scenario.dim as usize,
         scenario.config,
-        &TORUS_BETTI,
+        &S1_BETTI,
     );
 }
 
 #[divan::bench_group(sample_count = 10)]
 mod curated {
-    use super::{CASES, HashGrader, Orthant, OrthantTrie, Scenario, bench_torus};
+    use super::{CASES, HashGrader, Orthant, OrthantTrie, Scenario, bench_s1};
 
     #[divan::bench(args = CASES)]
     fn hashmap(bencher: divan::Bencher, scenario: Scenario) {
-        bench_torus::<HashGrader<Orthant>>(bencher, scenario);
+        bench_s1::<HashGrader<Orthant>>(bencher, scenario);
     }
 
     #[divan::bench(args = CASES)]
     fn trie(bencher: divan::Bencher, scenario: Scenario) {
-        bench_torus::<OrthantTrie>(bencher, scenario);
+        bench_s1::<OrthantTrie>(bencher, scenario);
     }
 }

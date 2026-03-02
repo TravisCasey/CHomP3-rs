@@ -1,19 +1,18 @@
 [package]
 name = "chomp3rs"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["Travis Casey"]
 edition = "2024"
 description = "Computational Homology Project 3"
 readme = "README.md"
 repository = "https://github.com/TravisCasey/CHomP3-rs"
-license = "MPL-2.0"
+license = "GPL-3.0-or-later"
 keywords = ["homology", "topology", "dynamical systems"]
 categories = ["mathematics"]
 resolver = "3"
 
 [features]
-chompi = ["dep:chompi", "serde"]
-serde = ["dep:serde"]
+mpi = ["dep:mpi", "dep:bincode"]
 
 [[bench]]
 name = "top_cube_sn"
@@ -23,23 +22,45 @@ harness = false
 name = "rotated_torus"
 harness = false
 
+[[bench]]
+name = "rotated_s1"
+harness = false
+
 [profile.bench]
 debug = true
 
 [dependencies]
-chompi = { path = "chompi", optional = true }
+bincode = { version = "2.0.1", features = ["serde", "alloc"], optional = true }
 flint-sys = "0.7.3"
 itertools = "0.14.0"
-serde = { version = "1.0.228", features = ["derive"], optional = true }
+mpi = { version = "0.8.0", features = ["derive"], optional = true }
+serde = { version = "1.0.228", features = ["derive"] }
 tracing = { version = "0.1.41", features = ["log"] }
 
 [workspace]
-members = ["test_utilities", "chompi"]
+members = []
 
 [dev-dependencies]
 divan = "0.1.21"
+nalgebra = "0.33"
+rand = "0.8"
+rand_chacha = "0.3"
+rand_distr = "0.4"
 serde_test = "1.0.177"
-test_utilities = { path = "test_utilities" }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+cast_lossless = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+len_without_is_empty = "allow"
+unreadable_literal = "allow"
+
+[lints]
+workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

@@ -1,6 +1,5 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 //! Subgrid matching utilities for cubical complexes.
 //!
@@ -18,7 +17,7 @@ pub use matching::OrthantMatching;
 use peaks::PeakFinder;
 pub use subdivision::GridSubdivision;
 
-use crate::{Cube, CubicalComplex, Grader, Orthant, OrthantIterator, TopCubeGrader};
+use crate::{Cube, CubicalComplex, Grader, Orthant, TopCubeGrader, complexes::OrthantIterator};
 
 /// A suborthant is an interval (in the face order) of cells within an orthant
 /// (the field `base_orthant`).
@@ -68,8 +67,8 @@ where
 {
     minimum_orthant: Orthant,
     maximum_orthant: Orthant,
-    maximum_kept_grade: u32,
-    maximum_kept_dimension: u32,
+    maximum_critical_grade: u32,
+    maximum_critical_dimension: u32,
     peak_finder: PeakFinder<G>,
 }
 
@@ -81,18 +80,18 @@ where
     /// done using the `match_subgrid` method.
     ///
     /// Any critical cells found with grade or dimension exceeding
-    /// `maximum_kept_grade` or `maximum_kept_dimension`, respectively, are not
-    /// returned.
+    /// `maximum_critical_grade` or `maximum_critical_dimension`, respectively,
+    /// are not returned.
     pub fn new<M>(
         complex: &CubicalComplex<M, TopCubeGrader<G>>,
-        maximum_kept_grade: u32,
-        maximum_kept_dimension: u32,
+        maximum_critical_grade: u32,
+        maximum_critical_dimension: u32,
     ) -> Self {
         Self {
             minimum_orthant: Orthant::zeros(complex.ambient_dimension() as usize),
             maximum_orthant: Orthant::zeros(complex.ambient_dimension() as usize),
-            maximum_kept_grade,
-            maximum_kept_dimension,
+            maximum_critical_grade,
+            maximum_critical_dimension,
             peak_finder: PeakFinder::new(
                 complex.ambient_dimension(),
                 complex.grader().min_grade(),
@@ -103,18 +102,19 @@ where
 
     /// Set the maximum grade of returned critical cells for any future
     /// `match_subgrid` calls.
-    pub fn set_maximum_kept_grade(&mut self, maximum_kept_grade: u32) {
-        self.maximum_kept_grade = maximum_kept_grade;
+    pub fn set_maximum_critical_grade(&mut self, maximum_critical_grade: u32) {
+        self.maximum_critical_grade = maximum_critical_grade;
     }
 
     /// Set the maximum dimension of returned critical cells for any future
     /// `match_subgrid` calls.
-    pub fn set_maximum_kept_dimension(&mut self, maximum_kept_dimension: u32) {
-        self.maximum_kept_dimension = maximum_kept_dimension;
+    pub fn set_maximum_critical_dimension(&mut self, maximum_critical_dimension: u32) {
+        self.maximum_critical_dimension = maximum_critical_dimension;
     }
 
     /// Match each orthant in the subgrid, and return a vector of:
     /// `(base orthant, vector of critical cells, match results)`.
+    #[must_use]
     pub fn match_subgrid(
         &mut self,
         minimum_orthant: Orthant,
@@ -169,8 +169,8 @@ where
         if suborthant.lower_extent == suborthant.upper_extent {
             // Discard the critical cell if grade or dimension exceeds the
             // configurable limits
-            if suborthant.upper_grade <= self.maximum_kept_grade
-                && suborthant.lower_dimension <= self.maximum_kept_dimension
+            if suborthant.upper_grade <= self.maximum_critical_grade
+                && suborthant.lower_dimension <= self.maximum_critical_dimension
             {
                 critical_cells.push(Cube::new(
                     suborthant.base_orthant.clone(),
@@ -181,15 +181,17 @@ where
             return OrthantMatching::Critical {
                 ace_dual_orthant: suborthant.lower_dual_orthant(),
                 ace_extent: suborthant.lower_extent,
+                grade: suborthant.upper_grade,
             };
         }
 
         // If all cells exceed the critical cell dimension limit, declare all
         // cells matched irrespective of grade; they do not matter.
-        if suborthant.lower_dimension > self.maximum_kept_dimension {
+        if suborthant.lower_dimension > self.maximum_critical_dimension {
             return OrthantMatching::construct_leaf(
                 suborthant.upper_extent,
                 suborthant.lower_extent,
+                suborthant.upper_grade,
             );
         }
 
@@ -203,6 +205,7 @@ where
             return OrthantMatching::construct_leaf(
                 suborthant.upper_extent,
                 suborthant.lower_extent,
+                suborthant.upper_grade,
             );
         };
 
@@ -248,18 +251,19 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Cyclic, HashMapGrader, HashMapModule};
+    use crate::{F2, HashGrader};
 
     #[test]
     fn match_cube_torus_complex_subgrid() {
         let grader = TopCubeGrader::new(
-            HashMapGrader::uniform([Orthant::from([1, 1, 1])], 1, 0),
+            HashGrader::uniform([Orthant::from([1, 1, 1])], 1, 0),
             Some(0),
         );
-        let complex = CubicalComplex::<
-            HashMapModule<Cube, Cyclic<2>>,
-            TopCubeGrader<HashMapGrader<Orthant>>,
-        >::new(Orthant::from([0, 0, 0]), Orthant::from([1, 1, 1]), grader);
+        let complex = CubicalComplex::<F2, TopCubeGrader<HashGrader<Orthant>>>::new(
+            Orthant::from([0, 0, 0]),
+            Orthant::from([1, 1, 1]),
+            grader,
+        );
         let mut subgrid = Subgrid::new(&complex, u32::MAX, u32::MAX);
 
         let base_critical_matching =
@@ -272,7 +276,8 @@ mod tests {
                 orthant_matching,
                 OrthantMatching::Leaf {
                     lower_extent: 0,
-                    match_axis: 0
+                    match_axis: 0,
+                    ..
                 }
             ));
         }
@@ -293,7 +298,9 @@ mod tests {
             suborthant_matchings: vec![
                 OrthantMatching::Leaf {
                     lower_extent: 0b000,
+                    upper_extent: 0b011,
                     match_axis: 0,
+                    grade: 0,
                 },
                 OrthantMatching::Branch {
                     upper_extent: 0b111,
@@ -301,7 +308,9 @@ mod tests {
                     suborthant_matchings: vec![
                         OrthantMatching::Leaf {
                             lower_extent: 0b100,
+                            upper_extent: 0b101,
                             match_axis: 0,
+                            grade: 0,
                         },
                         OrthantMatching::Branch {
                             upper_extent: 0b111,
@@ -310,10 +319,12 @@ mod tests {
                                 OrthantMatching::Critical {
                                     ace_dual_orthant: Orthant::from([0, 1, 1]),
                                     ace_extent: 0b110,
+                                    grade: 0,
                                 },
                                 OrthantMatching::Critical {
                                     ace_dual_orthant: Orthant::from([1, 1, 1]),
                                     ace_extent: 0b111,
+                                    grade: 1,
                                 },
                             ],
                         },
@@ -327,17 +338,14 @@ mod tests {
     #[test]
     fn match_two_cube_subgrid() {
         let grader = TopCubeGrader::new(
-            HashMapGrader::uniform(
+            HashGrader::uniform(
                 [Orthant::from([0, 0, 1, 1]), Orthant::from([1, 1, 0, 0])],
                 0,
                 1,
             ),
             Some(0),
         );
-        let complex = CubicalComplex::<
-            HashMapModule<Cube, Cyclic<2>>,
-            TopCubeGrader<HashMapGrader<Orthant>>,
-        >::new(
+        let complex = CubicalComplex::<F2, TopCubeGrader<HashGrader<Orthant>>>::new(
             Orthant::from([0, 0, 0, 0]),
             Orthant::from([1, 1, 1, 1]),
             grader,
@@ -361,7 +369,9 @@ mod tests {
             suborthant_matchings: vec![
                 OrthantMatching::Leaf {
                     lower_extent: 0b0000,
+                    upper_extent: 0b0011,
                     match_axis: 0,
+                    grade: 0,
                 },
                 OrthantMatching::Branch {
                     upper_extent: 0b0111,
@@ -370,14 +380,18 @@ mod tests {
                         OrthantMatching::Critical {
                             ace_dual_orthant: Orthant::from([0, 0, 1, 0]),
                             ace_extent: 0b0100,
+                            grade: 0,
                         },
                         OrthantMatching::Critical {
                             ace_dual_orthant: Orthant::from([1, 0, 1, 0]),
                             ace_extent: 0b0101,
+                            grade: 1,
                         },
                         OrthantMatching::Leaf {
                             lower_extent: 0b0110,
+                            upper_extent: 0b0111,
                             match_axis: 0,
+                            grade: 1,
                         },
                     ],
                 },
@@ -387,15 +401,21 @@ mod tests {
                     suborthant_matchings: vec![
                         OrthantMatching::Leaf {
                             lower_extent: 0b1000,
+                            upper_extent: 0b1100,
                             match_axis: 2,
+                            grade: 0,
                         },
                         OrthantMatching::Leaf {
                             lower_extent: 0b1001,
+                            upper_extent: 0b1101,
                             match_axis: 2,
+                            grade: 1,
                         },
                         OrthantMatching::Leaf {
                             lower_extent: 0b1010,
+                            upper_extent: 0b1111,
                             match_axis: 0,
+                            grade: 1,
                         },
                     ],
                 },

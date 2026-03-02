@@ -1,34 +1,33 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
-//! The `Cyclic` class implementing the cyclic field of integers with
-//! configurable modulus.
+//! Finite cyclic field with configurable prime modulus.
 
 use std::{
-    convert::From,
-    fmt::{Debug, Display, Error, Formatter},
+    fmt::{Debug, Display, Formatter, Result as FmtResult},
+    hash::{Hash, Hasher},
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
 use flint_sys::nmod_vec::{nmod_add, nmod_init, nmod_inv, nmod_mul, nmod_neg, nmod_sub, nmod_t};
-#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize, de::Visitor};
 
-use super::RingLike;
+use super::Ring;
 
-/// The field of integers modulo `MOD`, for prime modulus values `MOD`.
+/// The field of integers modulo a prime `MOD`.
 ///
-/// # Important Note
-/// `MOD` **must** be a prime number for the `FieldLike` implementation to be
-/// mathematically correct. While this is not explicitly checked at compile
-/// time, the implementation of `invert` and other dependent methods assume this
-/// property. Using a composite modulus may lead to incorrect results or panics.
+/// ### Mathematical Correctness
+///
+/// `MOD` *must* be a prime number to form an
+/// [`integral domain`](https://en.wikipedia.org/wiki/Integral_domain), which
+/// is required (but not checked) by the [`Ring`] trait. Primality of `MOD` is
+/// not checked at compile time, but downstream functionality assumes this
+/// property. Using a composite modulus may lead to incorrect results.
 ///
 /// Overflow and underflow are handled by the implementation.
 ///
 /// # Examples
-/// ## Equality Modulo `MOD`
+///
 /// ```rust
 /// use chomp3rs::Cyclic;
 /// assert_eq!(Cyclic::<5>::from(8), Cyclic::<5>::from(3));
@@ -39,6 +38,13 @@ pub struct Cyclic<const MOD: u64> {
     remainder: u64,
     modulus: nmod_t,
 }
+
+/// The field with two elements. Alias for [`Cyclic<2>`].
+pub type F2 = Cyclic<2>;
+
+// All FLINT `nmod_*` functions are safe when called with a valid `nmod_t`
+// initialized by `nmod_init`. The `modulus` field is always initialized in
+// `Cyclic::new`, so all `unsafe` calls below satisfy this precondition.
 
 impl<const MOD: u64> Cyclic<MOD> {
     /// Create a new `Cyclic` instance with the given value modulo `MOD`.
@@ -59,6 +65,8 @@ impl<const MOD: u64> Cyclic<MOD> {
             ninv: 0,
             norm: 0,
         };
+        // SAFETY: `nmod_init` only writes to the provided pointer with no other side
+        // effects.
         unsafe {
             nmod_init(&raw mut modulus, MOD);
         }
@@ -79,7 +87,7 @@ impl<const MOD: u64> Cyclic<MOD> {
 }
 
 impl<const MOD: u64> Debug for Cyclic<MOD> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "{} (mod {})", self.remainder, MOD)
     }
 }
@@ -90,7 +98,7 @@ impl<const MOD: u64> From<u64> for Cyclic<MOD> {
     }
 }
 
-impl<const MOD: u64> RingLike for Cyclic<MOD> {
+impl<const MOD: u64> Ring for Cyclic<MOD> {
     fn zero() -> Self {
         Self::new(0)
     }
@@ -103,24 +111,21 @@ impl<const MOD: u64> RingLike for Cyclic<MOD> {
         self.remainder != 0
     }
 
-    fn invert(&self) -> Self {
-        assert!(
-            self.remainder != 0,
-            "attempting to invert equivalency class zero"
-        );
-        if MOD == 2 {
-            return *self;
-        }
-
-        Self {
-            remainder: unsafe { nmod_inv(self.remainder, self.modulus) },
-            modulus: self.modulus,
+    fn invert(&self) -> Option<Self> {
+        match self.remainder {
+            0 => None,
+            1 => Some(*self),
+            _ => Some(Self {
+                // SAFETY: `self.modulus` initialized in `new`.
+                remainder: unsafe { nmod_inv(self.remainder, self.modulus) },
+                modulus: self.modulus,
+            }),
         }
     }
 }
 
 impl<const MOD: u64> Display for Cyclic<MOD> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "{} (mod {})", self.remainder, MOD)
     }
 }
@@ -129,6 +134,7 @@ impl<const MOD: u64> Neg for Cyclic<MOD> {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
+        // SAFETY: `self.modulus` initialized in `new`.
         Self {
             remainder: unsafe { nmod_neg(self.remainder, self.modulus) },
             modulus: self.modulus,
@@ -138,6 +144,7 @@ impl<const MOD: u64> Neg for Cyclic<MOD> {
 
 impl<const MOD: u64> AddAssign for Cyclic<MOD> {
     fn add_assign(&mut self, rhs: Self) {
+        // SAFETY: `self.modulus` initialized in `new`.
         self.remainder = unsafe { nmod_add(self.remainder, rhs.remainder, self.modulus) };
     }
 }
@@ -146,6 +153,7 @@ impl<const MOD: u64> Add for Cyclic<MOD> {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
+        // SAFETY: `self.modulus` initialized in `new`.
         Self {
             remainder: unsafe { nmod_add(self.remainder, rhs.remainder, self.modulus) },
             modulus: self.modulus,
@@ -155,6 +163,7 @@ impl<const MOD: u64> Add for Cyclic<MOD> {
 
 impl<const MOD: u64> SubAssign for Cyclic<MOD> {
     fn sub_assign(&mut self, rhs: Self) {
+        // SAFETY: `self.modulus` initialized in `new`.
         self.remainder = unsafe { nmod_sub(self.remainder, rhs.remainder, self.modulus) };
     }
 }
@@ -163,6 +172,7 @@ impl<const MOD: u64> Sub for Cyclic<MOD> {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
+        // SAFETY: `self.modulus` initialized in `new`.
         Self {
             remainder: unsafe { nmod_sub(self.remainder, rhs.remainder, self.modulus) },
             modulus: self.modulus,
@@ -172,6 +182,7 @@ impl<const MOD: u64> Sub for Cyclic<MOD> {
 
 impl<const MOD: u64> MulAssign for Cyclic<MOD> {
     fn mul_assign(&mut self, rhs: Self) {
+        // SAFETY: `self.modulus` initialized in `new`.
         self.remainder = unsafe { nmod_mul(self.remainder, rhs.remainder, self.modulus) };
     }
 }
@@ -180,6 +191,7 @@ impl<const MOD: u64> Mul for Cyclic<MOD> {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
+        // SAFETY: `self.modulus` initialized in `new`.
         Self {
             remainder: unsafe { nmod_mul(self.remainder, rhs.remainder, self.modulus) },
             modulus: self.modulus,
@@ -195,7 +207,12 @@ impl<const MOD: u64> PartialEq for Cyclic<MOD> {
 
 impl<const MOD: u64> Eq for Cyclic<MOD> {}
 
-#[cfg(feature = "serde")]
+impl<const MOD: u64> Hash for Cyclic<MOD> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.remainder.hash(state);
+    }
+}
+
 impl<const MOD: u64> Serialize for Cyclic<MOD> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -205,7 +222,6 @@ impl<const MOD: u64> Serialize for Cyclic<MOD> {
     }
 }
 
-#[cfg(feature = "serde")]
 impl<'de, const MOD: u64> Deserialize<'de> for Cyclic<MOD> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -216,7 +232,7 @@ impl<'de, const MOD: u64> Deserialize<'de> for Cyclic<MOD> {
         impl Visitor<'_> for U64Visitor {
             type Value = u64;
 
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fn expecting(&self, formatter: &mut Formatter) -> FmtResult {
                 formatter.write_str("any 64 bit integer")
             }
 
@@ -234,15 +250,14 @@ impl<'de, const MOD: u64> Deserialize<'de> for Cyclic<MOD> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "serde")]
     use serde_test::{Token, assert_tokens};
 
     use super::*;
 
     #[test]
     fn construction_and_modulo() {
-        assert_eq!(Cyclic::<2>::from(4).value(), 0);
-        assert_eq!(Cyclic::<2>::from(5).value(), 1);
+        assert_eq!(F2::from(4).value(), 0);
+        assert_eq!(F2::from(5).value(), 1);
         assert_eq!(Cyclic::<65521>::from(1).value(), 1);
         assert_eq!(Cyclic::<7>::from(16).value(), 2);
     }
@@ -302,11 +317,11 @@ mod tests {
         // Negation
         assert_eq!(-Cyclic::<7>::from(0), Cyclic::<7>::from(0));
         assert_eq!(-Cyclic::<5>::from(3), Cyclic::<5>::from(2));
-        assert_eq!(-Cyclic::<2>::from(3), Cyclic::<2>::from(1));
+        assert_eq!(-F2::from(3), F2::from(1));
     }
 
     #[test]
-    fn field_properties() {
+    fn inversion() {
         // Zero and one
         assert_eq!(Cyclic::<5>::zero(), Cyclic::<5>::from(0));
         assert_eq!(Cyclic::<5>::one(), Cyclic::<5>::from(1));
@@ -317,25 +332,21 @@ mod tests {
         assert!(Cyclic::<7>::from(5).is_invertible());
 
         // Inversion for modulus 2
-        assert_eq!(Cyclic::<2>::from(1).invert(), Cyclic::<2>::from(1));
-        assert_eq!(
-            Cyclic::<2>::from(1) * Cyclic::<2>::from(1).invert(),
-            Cyclic::<2>::one()
-        );
+        assert_eq!(F2::from(1).invert().unwrap(), F2::from(1));
+        assert_eq!(F2::from(1) * F2::from(1).invert().unwrap(), F2::one());
 
         // General inversion
         let x = Cyclic::<5>::from(3);
-        assert_eq!(x * x.invert(), Cyclic::<5>::one());
+        assert_eq!(x * x.invert().unwrap(), Cyclic::<5>::one());
 
         let y = Cyclic::<541>::from(327);
-        assert_eq!(y.invert(), Cyclic::<541>::from(316));
-        assert_eq!(y * y.invert(), Cyclic::<541>::one());
+        assert_eq!(y.invert().unwrap(), Cyclic::<541>::from(316));
+        assert_eq!(y * y.invert().unwrap(), Cyclic::<541>::one());
     }
 
     #[test]
-    #[should_panic(expected = "attempting to invert equivalency class zero")]
-    fn zero_inversion_panics() {
-        let _ = Cyclic::<17>::from(0).invert();
+    fn zero_inversion_none() {
+        assert!(Cyclic::<17>::from(0).invert().is_none());
     }
 
     #[test]
@@ -360,7 +371,6 @@ mod tests {
         assert_eq!(format!("{:?}", Cyclic::<5>::from(3)), "3 (mod 5)");
     }
 
-    #[cfg(feature = "serde")]
     #[test]
     fn serialization() {
         let a = Cyclic::<11>::from(6);

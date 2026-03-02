@@ -1,99 +1,82 @@
-use chomp3rs::{
-    ComplexLike, CoreductionMatching, Cube, CubicalComplex, Cyclic, HashMapGrader, HashMapModule,
-    MorseMatching, Orthant, OrthantIterator, TopCubeGrader, TopCubicalMatching,
-};
-use test_utilities::{top_cube_sn_hashmap, top_cube_sn_trie};
+//! Benchmarks for homology on S^n boundary-cube constructions.
+//!
+//! This suite uses a compact set of representative scenarios instead of a full
+//! Cartesian product of dimensions and configuration flags.
 
-type Module = HashMapModule<Cube, Cyclic<2>>;
-type Matching = TopCubicalMatching<Module, HashMapGrader<Orthant>>;
+mod common;
+
+use chomp3rs::prelude::*;
+use common::{MatchingConfig, Scenario, UniformGrader, generate_sn_orthants, run_matching_bench};
 
 fn main() {
     divan::main();
 }
 
-/// Create the S^n complex along with the list of orthants for filtering.
-fn top_cube_sn_hashmap_with_orthants(
-    n: usize,
-) -> (
-    CubicalComplex<Module, TopCubeGrader<HashMapGrader<Orthant>>>,
-    Vec<Orthant>,
-) {
-    let minimum = Orthant::new(&vec![0; n + 1]);
-    let maximum = Orthant::new(&vec![3; n + 1]);
+const CASES: &[Scenario] = &[
+    Scenario {
+        label: "s4_unfiltered_full",
+        dim: 4,
+        config: MatchingConfig {
+            filtered: false,
+            subgrid_size: 1,
+            max_grade: None,
+        },
+    },
+    Scenario {
+        label: "s4_filtered_full",
+        dim: 4,
+        config: MatchingConfig {
+            filtered: true,
+            subgrid_size: 1,
+            max_grade: None,
+        },
+    },
+    Scenario {
+        label: "s7_filtered_subgrid2_full",
+        dim: 7,
+        config: MatchingConfig {
+            filtered: true,
+            subgrid_size: 2,
+            max_grade: None,
+        },
+    },
+    Scenario {
+        label: "s7_filtered_subgrid2_grade0",
+        dim: 7,
+        config: MatchingConfig {
+            filtered: true,
+            subgrid_size: 2,
+            max_grade: Some(0),
+        },
+    },
+];
 
-    let maximum_included = Orthant::new(&vec![2; n + 1]);
-    let orthants: Vec<Orthant> = OrthantIterator::new(minimum.clone(), maximum_included)
-        .filter(|top_cube| *top_cube != Orthant::new(&vec![1; n + 1]))
-        .collect();
-
-    let grader = TopCubeGrader::new(
-        HashMapGrader::uniform(orthants.iter().cloned(), 0, 1),
-        Some(0),
-    );
-    (CubicalComplex::new(minimum, maximum, grader), orthants)
+fn expected_betti_sn(n: usize) -> Vec<usize> {
+    let mut betti = vec![0; n + 1];
+    betti[0] = 1;
+    betti[n] = 1;
+    betti
 }
 
-#[divan::bench(args = [4, 5, 6, 7], sample_count = 10)]
-fn top_cube_reduce_sn_hashmap(bencher: divan::Bencher, n: u32) {
-    bencher
-        .with_inputs(|| top_cube_sn_hashmap(n as usize))
-        .bench_local_values(|complex| {
-            let mut matching = TopCubicalMatching::default();
-            let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
-
-            // Don't optimize away..
-            assert_eq!(morse_complex.dimension(), n + 1);
-        });
+fn bench_sn<G: UniformGrader<Orthant>>(bencher: divan::Bencher, scenario: Scenario) {
+    // For S^n benchmarks, `dim` holds the sphere dimension; ambient = dim + 1.
+    let orthants = generate_sn_orthants(scenario.dim as usize);
+    let ambient_dim = (scenario.dim + 1) as usize;
+    let expected = expected_betti_sn(scenario.dim as usize);
+    run_matching_bench::<G>(bencher, &orthants, ambient_dim, scenario.config, &expected);
 }
 
-#[divan::bench(args = [4, 5, 6, 7], sample_count = 10)]
-fn top_cube_reduce_sn_trie(bencher: divan::Bencher, n: u32) {
-    bencher
-        .with_inputs(|| top_cube_sn_trie(n as usize))
-        .bench_local_values(|complex| {
-            let mut matching = TopCubicalMatching::default();
-            let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
+#[divan::bench_group(sample_count = 10)]
+mod curated {
+    use super::{CASES, HashGrader, Orthant, OrthantTrie, Scenario, bench_sn};
 
-            // Don't optimize away..
-            assert_eq!(morse_complex.dimension(), n + 1);
-        });
-}
+    #[divan::bench(args = CASES)]
+    fn hashmap(bencher: divan::Bencher, scenario: Scenario) {
+        bench_sn::<HashGrader<Orthant>>(bencher, scenario);
+    }
 
-#[divan::bench(args = [4, 5, 6, 7], sample_count = 10)]
-fn top_cube_reduce_sn_hashmap_grade_truncated(bencher: divan::Bencher, n: u32) {
-    bencher
-        .with_inputs(|| top_cube_sn_hashmap(n as usize))
-        .bench_local_values(|complex| {
-            let mut matching = TopCubicalMatching::with_max_grade(0);
-            let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
-
-            // Don't optimize away.. (note truncation)
-            assert_eq!(morse_complex.dimension(), n);
-        });
-}
-
-#[divan::bench(args = [4, 5, 6, 7], sample_count = 10)]
-fn top_cube_reduce_sn_trie_grade_truncated(bencher: divan::Bencher, n: u32) {
-    bencher
-        .with_inputs(|| top_cube_sn_trie(n as usize))
-        .bench_local_values(|complex| {
-            let mut matching = TopCubicalMatching::with_max_grade(0);
-            let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
-
-            // Don't optimize away.. (note truncation)
-            assert_eq!(morse_complex.dimension(), n);
-        });
-}
-
-#[divan::bench(args = [4, 5, 6, 7], sample_count = 10)]
-fn top_cube_reduce_sn_hashmap_filtered(bencher: divan::Bencher, n: u32) {
-    bencher
-        .with_inputs(|| top_cube_sn_hashmap_with_orthants(n as usize))
-        .bench_local_values(|(complex, orthants)| {
-            let mut matching: Matching = Matching::builder().filter_orthants(orthants).build();
-            let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
-
-            // Don't optimize away..
-            assert_eq!(morse_complex.dimension(), n + 1);
-        });
+    #[divan::bench(args = CASES)]
+    fn trie(bencher: divan::Bencher, scenario: Scenario) {
+        bench_sn::<OrthantTrie>(bencher, scenario);
+    }
 }

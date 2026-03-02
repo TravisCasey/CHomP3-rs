@@ -1,6 +1,5 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 //! A vector-backed doubly linked list optimized for O(1) random removal.
 //!
@@ -38,6 +37,8 @@ struct LLNode {
     parent: Option<usize>,
     /// Index of the next node in the list, or `None` if this is the back.
     child: Option<usize>,
+    /// Whether this node is currently active (i.e., not yet removed).
+    active: bool,
 }
 
 /// A doubly linked list backed by a contiguous vector.
@@ -89,6 +90,7 @@ impl LinkedList {
             data,
             parent: self.back,
             child: None,
+            active: true,
         });
 
         // Update the previous back node to point to this new node
@@ -111,11 +113,10 @@ impl LinkedList {
     /// should be one previously returned by
     /// [`push_back`](LinkedList::push_back).
     ///
-    /// Returns `None` if the index is out of bounds. Note that removing an
-    /// already-removed index may return stale data; callers are responsible
-    /// for tracking which indices are valid.
+    /// Returns `None` if the index is out of bounds or the element at that
+    /// index has already been removed.
     pub fn pop(&mut self, index: usize) -> Option<usize> {
-        if index >= self.nodes.len() {
+        if index >= self.nodes.len() || !self.nodes[index].active {
             return None;
         }
 
@@ -137,9 +138,10 @@ impl LinkedList {
             self.back = node.parent;
         }
 
-        // Mark the node as removed by clearing its pointers
+        // Mark the node as removed
         self.nodes[index].parent = None;
         self.nodes[index].child = None;
+        self.nodes[index].active = false;
 
         self.size -= 1;
         Some(node.data)
@@ -150,6 +152,7 @@ impl LinkedList {
     /// Returns `None` if the list is empty.
     pub fn pop_front(&mut self) -> Option<usize> {
         self.front.map(|front_index| {
+            debug_assert!(self.nodes[front_index].active, "front node is not active");
             let node = self.nodes[front_index].clone();
 
             // Update front pointer to the next node
@@ -163,9 +166,10 @@ impl LinkedList {
                 self.back = None;
             }
 
-            // Mark the node as removed by clearing its pointers
+            // Mark the node as removed
             self.nodes[front_index].parent = None;
             self.nodes[front_index].child = None;
+            self.nodes[front_index].active = false;
 
             self.size -= 1;
             node.data
@@ -352,5 +356,56 @@ mod tests {
         let list = LinkedList::with_capacity(100);
         assert!(list.is_empty());
         assert!(list.nodes.capacity() >= 100);
+    }
+
+    #[test]
+    fn double_pop_returns_none() {
+        let mut list = LinkedList::new();
+        let idx = list.push_back(42);
+        assert_eq!(list.pop(idx), Some(42));
+        // Second pop on the same index must return None, not corrupt state
+        assert_eq!(list.pop(idx), None);
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn pop_front_then_pop_same_index() {
+        let mut list = LinkedList::new();
+        list.push_back(10);
+        list.push_back(20);
+        // pop_front removes index 0 (data=10)
+        assert_eq!(list.pop_front(), Some(10));
+        // Attempting to pop index 0 again returns None without corrupting list
+        assert_eq!(list.pop(0), None);
+        assert_eq!(list.len(), 1);
+        // Remaining element (index 1, data=20) is still accessible
+        assert_eq!(list.pop_front(), Some(20));
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn pop_preserves_list_integrity() {
+        let mut list = LinkedList::new();
+        let i0 = list.push_back(1);
+        let i1 = list.push_back(2);
+        let i2 = list.push_back(3);
+
+        // Remove middle, then try to double-remove it
+        assert_eq!(list.pop(i1), Some(2));
+        assert_eq!(list.pop(i1), None);
+
+        // List should still iterate correctly over remaining elements
+        let values: Vec<usize> = list.iter().collect();
+        assert_eq!(values, vec![1, 3]);
+
+        // Remove remaining in order
+        assert_eq!(list.pop(i0), Some(1));
+        assert_eq!(list.pop(i2), Some(3));
+        assert!(list.is_empty());
+
+        // Further pops return None, size stays 0
+        assert_eq!(list.pop(i0), None);
+        assert_eq!(list.pop(i2), None);
+        assert_eq!(list.size, 0);
     }
 }

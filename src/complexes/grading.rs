@@ -1,13 +1,10 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
-//! General grading implementations for cell complexes.
+//! General-purpose [`Grader`] implementations for cell complexes.
 //!
-//! This module provides concrete implementations of the `Grader` trait for
-//! assigning grades (filtration levels) to cells in complexes. The primary
-//! implementation is `HashMapGrader`, which stores grades in a `HashMap` for
-//! efficient lookup.
+//! [`HashGrader`] stores cell grades in a `HashMap`, with a configurable
+//! default for cells not in the map.
 
 use std::{collections::HashMap, hash::Hash};
 
@@ -20,29 +17,26 @@ use super::Grader;
 /// This implementation provides efficient grade lookup and is suitable for most
 /// use cases. The grader is typically constructed once and used in a read-only
 /// fashion, though mutable access is available through the
-/// [`HashMapGrader::grades_mut`] method for advanced operations.
+/// [`HashGrader::grades_mut`] method for advanced operations.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use chomp3rs::{Grader, HashMapGrader};
+/// use chomp3rs::{Grader, HashGrader};
 ///
 /// // Create from (cell, grade) pairs
-/// let grader = HashMapGrader::from_iter([(1, 10), (2, 20)]);
+/// let grader = HashGrader::from_iter([(1, 10), (2, 20)]);
 /// assert_eq!(grader.grade(&1), 10);
 /// assert_eq!(grader.grade(&2), 20);
 /// assert_eq!(grader.grade(&3), 0); // default grade
 /// ```
 #[derive(Clone, Debug, Default)]
-pub struct HashMapGrader<B>
-where
-    B: Hash + Eq + Clone,
-{
+pub struct HashGrader<B> {
     grades: HashMap<B, u32>,
     default_grade: u32,
 }
 
-impl<B> HashMapGrader<B>
+impl<B> HashGrader<B>
 where
     B: Hash + Eq + Clone,
 {
@@ -74,10 +68,10 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// use chomp3rs::{Grader, HashMapGrader};
+    /// use chomp3rs::{Grader, HashGrader};
     ///
     /// let cells = vec![10u16, 25u16, 100u16];
-    /// let grader = HashMapGrader::from_cells_with_fn(cells, |cell| (*cell / 10) as u32);
+    /// let grader = HashGrader::from_cells_with_fn(cells, |cell| (*cell / 10) as u32);
     ///
     /// assert_eq!(grader.grade(&10u16), 1);
     /// assert_eq!(grader.grade(&25u16), 2);
@@ -112,10 +106,10 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// use chomp3rs::{Grader, HashMapGrader};
+    /// use chomp3rs::{Grader, HashGrader};
     ///
     /// let cells = vec![(0, 1), (2, 3), (4, 5)];
-    /// let grader = HashMapGrader::uniform(cells, 5, 2);
+    /// let grader = HashGrader::uniform(cells, 5, 2);
     ///
     /// assert_eq!(grader.grade(&(0, 1)), 5);
     /// assert_eq!(grader.grade(&(2, 3)), 5);
@@ -165,7 +159,7 @@ where
     }
 }
 
-impl<B> Grader<B> for HashMapGrader<B>
+impl<B> Grader<B> for HashGrader<B>
 where
     B: Hash + Eq + Clone,
 {
@@ -174,7 +168,7 @@ where
     }
 }
 
-impl<B> FromIterator<(B, u32)> for HashMapGrader<B>
+impl<B> FromIterator<(B, u32)> for HashGrader<B>
 where
     B: Hash + Eq + Clone,
 {
@@ -199,7 +193,7 @@ mod tests {
         map.insert([0, 1], 1);
         map.insert([1, 0], 2);
 
-        let grader = HashMapGrader::from_map(map, 0);
+        let grader = HashGrader::from_map(map, 0);
         assert_eq!(grader.grade(&[0, 1]), 1);
         assert_eq!(grader.grade(&[1, 0]), 2);
         assert_eq!(grader.grade(&[1, 1]), 0);
@@ -207,17 +201,16 @@ mod tests {
         let mut map = HashMap::new();
         map.insert((5, 10), 5);
 
-        let grader = HashMapGrader::from_map(map, 999);
+        let grader = HashGrader::from_map(map, 999);
         assert_eq!(grader.grade(&(5, 10)), 5);
         assert_eq!(grader.grade(&(0, 0)), 999);
         assert_eq!(grader.default_grade(), 999);
     }
 
     #[test]
-    #[allow(clippy::cast_sign_loss)]
     fn from_cells_with_fn() {
         let cells = vec![5i16, 15i16, 150i16];
-        let grader = HashMapGrader::from_cells_with_fn(cells, |cell| (*cell / 5) as u32);
+        let grader = HashGrader::from_cells_with_fn(cells, |cell| (*cell / 5) as u32);
 
         assert_eq!(grader.grade(&5i16), 1);
         assert_eq!(grader.grade(&15i16), 3);
@@ -227,7 +220,7 @@ mod tests {
 
     #[test]
     fn from_iter() {
-        let grader: HashMapGrader<i8> = vec![(1, 1), (2, 2), (3, 3)].into_iter().collect();
+        let grader: HashGrader<i8> = vec![(1, 1), (2, 2), (3, 3)].into_iter().collect();
 
         assert_eq!(grader.grade(&1), 1);
         assert_eq!(grader.grade(&2), 2);
@@ -237,7 +230,7 @@ mod tests {
 
     #[test]
     fn mutable_access() {
-        let mut grader = HashMapGrader::new(0);
+        let mut grader = HashGrader::new(0);
 
         // Add grades using mutable reference
         {
@@ -252,7 +245,7 @@ mod tests {
 
     #[test]
     fn set_default_grade() {
-        let mut grader: HashMapGrader<[u16; 3]> = HashMapGrader::new(0);
+        let mut grader: HashGrader<[u16; 3]> = HashGrader::new(0);
 
         assert_eq!(grader.grade(&[100, 200, 300]), 0);
 
@@ -265,7 +258,7 @@ mod tests {
     #[test]
     fn uniform() {
         let cells = vec!["a", "b", "c"];
-        let grader = HashMapGrader::uniform(cells, 42, 7);
+        let grader = HashGrader::uniform(cells, 42, 7);
 
         assert_eq!(grader.grade(&"a"), 42);
         assert_eq!(grader.grade(&"b"), 42);

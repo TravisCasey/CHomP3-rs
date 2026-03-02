@@ -1,6 +1,5 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 //! Peak-finding utilities for grade boundary detection in orthants.
 
@@ -406,11 +405,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{HashMapGrader, TopCubeGrader};
+    use crate::{HashGrader, TopCubeGrader};
 
-    fn prepare_two_cube_peak_finder() -> (PeakFinder<HashMapGrader<Orthant>>, Orthant, Orthant) {
+    fn prepare_two_cube_peak_finder() -> (PeakFinder<HashGrader<Orthant>>, Orthant, Orthant) {
         let grader = TopCubeGrader::new(
-            HashMapGrader::uniform(
+            HashGrader::uniform(
                 [Orthant::from([0, 0, 1, 1]), Orthant::from([1, 1, 0, 0])],
                 0,
                 1,
@@ -459,7 +458,7 @@ mod tests {
             (0, vec![0b000000]),
         ]);
 
-        let mut peak_finder = PeakFinder::new(6, None, HashMapGrader::new(0));
+        let mut peak_finder = PeakFinder::new(6, None, HashGrader::new(0));
         peak_finder.peaks = peaks;
         peak_finder.last_min_grade = 0; // No short circuit except for minimum grade
 

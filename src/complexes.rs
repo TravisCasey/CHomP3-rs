@@ -1,133 +1,30 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
-//! Cell complexes and cubical complex implementations.
+//! Cell complex abstractions and implementations for computational homology.
 //!
-//! This module provides the core abstractions and implementations for working
-//! with cell complexes in computational homology. The primary components are:
-//!
-//! - **Traits**: [`ComplexLike`] and [`Grader`] define the expected behavior
-//!   for complexes and grading functions.
-//! - **General complexes**: [`CellComplex`] provides an explicit vector-based
-//!   implementation suitable for moderate-sized complexes.
-//! - **Cubical complexes**: The [`cubical`] module provides specialized
-//!   implementations for efficient high-dimensional cubical complexes.
-//! - **Grading**: [`HashMapGrader`] provides a general-purpose filtration
-//!   function for any complex.
-//!
-//! # Cell Complexes
-//!
-//! A cell complex is a mathematical structure composed of cells (vertices,
-//! edges, faces, etc.) with well-defined boundary and coboundary relationships.
-//! The [`ComplexLike`] trait provides the interface for computing boundaries,
-//! coboundaries, and iterating over cells.
-//!
-//! ## Explicit vs Implicit Complexes
-//!
-//! - **Explicit**: [`CellComplex`] stores all cells, boundaries, and
-//!   coboundaries in memory. Suitable for moderate-sized complexes where
-//!   explicit storage is feasible.
-//! - **Implicit**: [`CubicalComplex`] computes boundaries and coboundaries
-//!   on-the-fly without storing all cells. Suitable for very large
-//!   high-dimensional cubical complexes.
-//!
-//! # Grading and Filtrations
-//!
-//! The [`Grader`] trait assigns grades (non-negative integers) to cells,
-//! defining a filtration of the complex. Filtrations are used in:
-//!
-//! - Discrete Morse theory with grade-based matching,
-//! - Sublevel set and distance-based filtrations,
-//! - Persistent homology computation.
-//!
-//! # Examples
-//!
-//! ## Creating an Explicit Cell Complex
-//!
-//! ```rust
-//! use chomp3rs::{CellComplex, Cyclic, HashMapModule, ModuleLike, RingLike};
-//!
-//! // Create a simple line segment: two vertices (0, 1) and one edge (2)
-//! let cell_dimensions = vec![0, 0, 1];
-//! let grades = vec![0, 0, 0];
-//!
-//! let mut boundaries: Vec<HashMapModule<u32, Cyclic<5>>> = vec![HashMapModule::new(); 3];
-//! // Boundary of edge (cell 2) is vertex1 - vertex0
-//! boundaries[2].insert_or_add(1, Cyclic::<5>::one());
-//! boundaries[2].insert_or_add(0, -Cyclic::<5>::one());
-//!
-//! let coboundaries = vec![HashMapModule::new(); 3];
-//! // (Coboundaries would be filled in for a complete example)
-//!
-//! let complex =
-//!     CellComplex::new(cell_dimensions, grades, boundaries, coboundaries);
-//! ```
-//!
-//! ## Working with Cubical Complexes
-//!
-//! ```rust
-//! use std::collections::HashMap;
-//!
-//! use chomp3rs::{
-//!     ComplexLike, Cube, CubicalComplex, Cyclic, HashMapGrader,
-//!     HashMapModule, ModuleLike, Orthant,
-//! };
-//!
-//! // Create a 2D cubical complex
-//! let min = Orthant::from([0, 0]);
-//! let max = Orthant::from([2, 2]);
-//!
-//! // Set up grading for filtration
-//! let vertex = Cube::vertex(Orthant::from([1, 1]));
-//! let mut grades = HashMap::new();
-//! grades.insert(vertex.clone(), 1);
-//! let grader = HashMapGrader::from_map(grades, 0);
-//!
-//! let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
-//!     CubicalComplex::new(min, max, grader);
-//!
-//! // Compute boundary of a cube
-//! let boundary = complex.cell_boundary(&vertex);
-//! assert_eq!(boundary, HashMapModule::new()); // Vertices have empty boundary
-//! ```
-//!
-//! ## Custom Grader Implementation
-//!
-//! ```rust
-//! use chomp3rs::Grader;
-//!
-//! struct DistanceGrader {
-//!     origin: (i32, i32),
-//! }
-//!
-//! impl Grader<(i32, i32)> for DistanceGrader {
-//!     fn grade(&self, cell: &(i32, i32)) -> u32 {
-//!         let dx = (cell.0 - self.origin.0).abs();
-//!         let dy = (cell.1 - self.origin.1).abs();
-//!         (dx + dy) as u32
-//!     }
-//! }
-//!
-//! let grader = DistanceGrader { origin: (0, 0) };
-//! assert_eq!(grader.grade(&(3, 4)), 7); // Manhattan distance
-//! ```
+//! The [`Complex`] trait provides the core interface for cell complexes with
+//! boundary and coboundary operations, and [`Grader`] assigns filtration levels
+//! to cells. Two [`Complex`] implementations are provided: [`CellComplex`] for
+//! explicit vector-based storage (typically used as Morse reduction output),
+//! and [`CubicalComplex`] for implicit high-dimensional cubical complexes that
+//! compute boundaries on-the-fly.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, hash::Hash};
 
 pub use cell_complex::CellComplex;
 pub use cubical::{
     Cube, CubeIterator, CubicalComplex, Orthant, OrthantIterator, OrthantTrie, TopCubeGrader,
 };
-pub use grading::HashMapGrader;
+pub use grading::HashGrader;
 
-use crate::{ModuleLike, RingLike};
+use crate::{Chain, Ring};
 
 pub mod cell_complex;
 pub mod cubical;
 pub mod grading;
 
-/// Trait for types representing cell complexes over modules.
+/// Trait for types representing cell complexes.
 ///
 /// A cell complex is a mathematical structure composed of cells with defined
 /// boundary and coboundary relationships. This trait provides the core
@@ -142,14 +39,10 @@ pub mod grading;
 ///
 /// # Examples
 ///
-/// Implementing `ComplexLike` for a custom complex type (a line segment):
+/// Implementing `Complex` for a custom complex type (a line segment):
 ///
 /// ```rust
-/// use std::ops::Range;
-///
-/// use chomp3rs::{
-///     ComplexLike, Cyclic, Grader, HashMapModule, ModuleLike, RingLike,
-/// };
+/// use chomp3rs::{Chain, Complex, Cyclic, Grader, Ring};
 ///
 /// // A line segment: vertices 0, 1 and edge 2
 /// struct LineSegment;
@@ -160,44 +53,30 @@ pub mod grading;
 ///     }
 /// }
 ///
-/// impl ComplexLike for LineSegment {
+/// impl Complex for LineSegment {
 ///     type Cell = u32;
-///     type CellIterator = Range<u32>;
-///     type Module = HashMapModule<u32, Cyclic<5>>;
 ///     type Ring = Cyclic<5>;
 ///
-///     fn cell_boundary_if(
-///         &self,
-///         cell: &u32,
-///         predicate: impl Fn(&u32) -> bool,
-///     ) -> Self::Module {
-///         let mut boundary = HashMapModule::new();
+///     fn cell_boundary(&self, cell: &u32) -> Chain<u32, Cyclic<5>> {
+///         let mut boundary = Chain::new();
 ///         match cell {
 ///             2 => {
 ///                 // Edge boundary: vertex1 - vertex0
-///                 if predicate(&1) {
-///                     boundary.insert_or_add(1, Cyclic::one());
-///                 }
-///                 if predicate(&0) {
-///                     boundary.insert_or_add(0, -Cyclic::one());
-///                 }
+///                 boundary.insert_or_add(1, Cyclic::one());
+///                 boundary.insert_or_add(0, -Cyclic::one());
 ///             },
 ///             _ => {}, // Vertices have empty boundary
 ///         }
 ///         boundary
 ///     }
 ///
-///     fn cell_coboundary_if(
-///         &self,
-///         cell: &u32,
-///         predicate: impl Fn(&u32) -> bool,
-///     ) -> Self::Module {
-///         let mut coboundary = HashMapModule::new();
+///     fn cell_coboundary(&self, cell: &u32) -> Chain<u32, Cyclic<5>> {
+///         let mut coboundary = Chain::new();
 ///         match cell {
-///             0 if predicate(&2) => {
+///             0 => {
 ///                 coboundary.insert_or_add(2, -Cyclic::one());
 ///             },
-///             1 if predicate(&2) => {
+///             1 => {
 ///                 coboundary.insert_or_add(2, Cyclic::one());
 ///             },
 ///             _ => {},
@@ -205,7 +84,7 @@ pub mod grading;
 ///         coboundary
 ///     }
 ///
-///     fn iter(&self) -> Self::CellIterator {
+///     fn iter(&self) -> impl Iterator<Item = u32> {
 ///         0..3
 ///     }
 ///
@@ -221,129 +100,29 @@ pub mod grading;
 /// let complex = LineSegment;
 /// let edge_boundary = complex.cell_boundary(&2);
 /// let boundary_of_boundary = complex.boundary(&edge_boundary);
-/// assert_eq!(boundary_of_boundary, HashMapModule::new());
+/// assert_eq!(boundary_of_boundary, Chain::new());
 /// ```
-pub trait ComplexLike: Grader<Self::Cell> {
-    /// Cell type of the complex. Must be equivalent to
-    /// `<Self::Module as ModuleLike>::Cell`.
-    type Cell: Clone + Debug + Eq;
+pub trait Complex: Grader<Self::Cell> {
+    /// Cell type of the complex.
+    type Cell: Clone + Debug + Eq + Hash;
 
-    /// Ring type of chains emitted by the complex. Must be equivalent to
-    /// `<Self::Module as ModuleLike>::Ring`.
-    type Ring: RingLike;
+    /// Ring type of chains emitted by the complex.
+    type Ring: Ring;
 
-    /// The type of chains and cochains accepted by and output by the complex.
-    /// Its associated types `Cell` and `Ring` must be equivalent to the
-    /// `Cell` and `Ring` associated types of the complex.
-    type Module: ModuleLike<Cell = Self::Cell, Ring = Self::Ring>;
-
-    /// Iterator type for traversing all cells in the complex.
-    type CellIterator: Iterator<Item = Self::Cell>;
-
-    /// Return the boundary chain of a cell as a module element, including only
-    /// those boundary cells that satisfy the predicate.
+    /// Return the boundary chain of a cell.
     ///
     /// The boundary of a cell is a formal linear combination of its faces
     /// (lower-dimensional boundary cells).
-    fn cell_boundary_if(
-        &self,
-        cell: &Self::Cell,
-        predicate: impl Fn(&Self::Cell) -> bool,
-    ) -> Self::Module;
+    fn cell_boundary(&self, cell: &Self::Cell) -> Chain<Self::Cell, Self::Ring>;
 
-    /// Return the boundary chain of a cell as a module element.
-    ///
-    /// This is a provided method that calls `cell_boundary_if` with a predicate
-    /// that accepts all cells.
-    fn cell_boundary(&self, cell: &Self::Cell) -> Self::Module {
-        self.cell_boundary_if(cell, |_| true)
-    }
-
-    /// Compute the boundary of a chain (formal linear combination of cells),
-    /// including only those boundary cells that satisfy the predicate.
-    ///
-    /// This is a provided method that applies the predicate to each boundary
-    /// cell before including it in the result.
-    fn boundary_if(
-        &self,
-        chain: &Self::Module,
-        predicate: impl Fn(&Self::Cell) -> bool,
-    ) -> Self::Module {
-        chain
-            .iter()
-            .fold(Self::Module::new(), |acc, (cell, coefficient)| {
-                acc + self
-                    .cell_boundary_if(cell, &predicate)
-                    .scalar_mul(coefficient.clone())
-            })
-    }
-
-    /// Compute the boundary of a chain (formal linear combination of cells).
-    ///
-    /// This is a provided method that computes the full boundary without
-    /// filtering.
-    fn boundary(&self, chain: &Self::Module) -> Self::Module {
-        chain
-            .iter()
-            .fold(Self::Module::new(), |acc, (cell, coefficient)| {
-                acc + self.cell_boundary(cell).scalar_mul(coefficient.clone())
-            })
-    }
-
-    /// Return the coboundary chain of a cell as a module element, including
-    /// only those coboundary cells that satisfy the predicate.
+    /// Return the coboundary chain of a cell.
     ///
     /// The coboundary of a cell is a formal linear combination of cells that
     /// have this cell as a face.
-    fn cell_coboundary_if(
-        &self,
-        cell: &Self::Cell,
-        predicate: impl Fn(&Self::Cell) -> bool,
-    ) -> Self::Module;
-
-    /// Return the coboundary chain of a cell as a module element.
-    ///
-    /// This is a provided method that calls `cell_coboundary_if` with a
-    /// predicate that accepts all cells.
-    fn cell_coboundary(&self, cell: &Self::Cell) -> Self::Module {
-        self.cell_coboundary_if(cell, |_| true)
-    }
-
-    /// Compute the coboundary of a cochain (formal linear combination of
-    /// cells), including only those coboundary cells that satisfy the
-    /// predicate.
-    ///
-    /// This is a provided method that applies the predicate to each coboundary
-    /// cell before including it in the result.
-    fn coboundary_if(
-        &self,
-        chain: &Self::Module,
-        predicate: impl Fn(&Self::Cell) -> bool,
-    ) -> Self::Module {
-        chain
-            .iter()
-            .fold(Self::Module::new(), |acc, (cell, coefficient)| {
-                acc + self
-                    .cell_coboundary_if(cell, &predicate)
-                    .scalar_mul(coefficient.clone())
-            })
-    }
-
-    /// Compute the coboundary of a cochain (formal linear combination of
-    /// cells).
-    ///
-    /// This is a provided method that computes the full coboundary without
-    /// filtering.
-    fn coboundary(&self, cochain: &Self::Module) -> Self::Module {
-        cochain
-            .iter()
-            .fold(Self::Module::new(), |acc, (cell, coefficient)| {
-                acc + self.cell_coboundary(cell).scalar_mul(coefficient.clone())
-            })
-    }
+    fn cell_coboundary(&self, cell: &Self::Cell) -> Chain<Self::Cell, Self::Ring>;
 
     /// Returns an iterator over all cells in the complex.
-    fn iter(&self) -> Self::CellIterator;
+    fn iter(&self) -> impl Iterator<Item = Self::Cell>;
 
     /// Returns the dimension of the complex.
     ///
@@ -353,6 +132,49 @@ pub trait ComplexLike: Grader<Self::Cell> {
 
     /// Returns the topological dimension of a specific cell.
     fn cell_dimension(&self, cell: &Self::Cell) -> u32;
+
+    /// Compute the boundary of a chain (formal linear combination of cells).
+    ///
+    /// The default implementation calls [`cell_boundary`](Self::cell_boundary)
+    /// for each term and accumulates the result via scalar multiplication and
+    /// addition. Cost is proportional to the number of terms times the
+    /// boundary size per cell.
+    fn boundary<'a>(
+        &self,
+        chain: impl IntoIterator<Item = (&'a Self::Cell, &'a Self::Ring)>,
+    ) -> Chain<Self::Cell, Self::Ring>
+    where
+        Self::Cell: 'a,
+        Self::Ring: 'a,
+    {
+        chain
+            .into_iter()
+            .fold(Chain::new(), |acc, (cell, coefficient)| {
+                acc + self.cell_boundary(cell).scalar_mul(coefficient)
+            })
+    }
+
+    /// Compute the coboundary of a cochain (formal linear combination of
+    /// cells).
+    ///
+    /// The default implementation calls
+    /// [`cell_coboundary`](Self::cell_coboundary) for each term and
+    /// accumulates the result via scalar multiplication and addition. Cost is
+    /// proportional to the number of terms times the coboundary size per cell.
+    fn coboundary<'a>(
+        &self,
+        chain: impl IntoIterator<Item = (&'a Self::Cell, &'a Self::Ring)>,
+    ) -> Chain<Self::Cell, Self::Ring>
+    where
+        Self::Cell: 'a,
+        Self::Ring: 'a,
+    {
+        chain
+            .into_iter()
+            .fold(Chain::new(), |acc, (cell, coefficient)| {
+                acc + self.cell_coboundary(cell).scalar_mul(coefficient)
+            })
+    }
 }
 
 /// Trait for assigning grades (filtration levels) to cells in a complex.

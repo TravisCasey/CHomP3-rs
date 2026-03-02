@@ -1,6 +1,5 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 //! Grid subdivision utilities for partitioning orthant grids.
 
@@ -178,7 +177,13 @@ impl GridSubdivision {
     fn indices_to_bounds(&self, indices: HashSet<Vec<i16>>) -> Vec<(Orthant, Orthant)> {
         let dim = self.minimum_orthant.ambient_dimension() as usize;
 
-        indices
+        // Sort indices for deterministic iteration order.
+        // Note: This is a diagnostic measure - the algorithm should produce
+        // correct results regardless of iteration order.
+        let mut sorted_indices: Vec<_> = indices.into_iter().collect();
+        sorted_indices.sort();
+
+        sorted_indices
             .into_iter()
             .map(|indices| {
                 let subgrid_min: Orthant = (0..dim)
@@ -215,7 +220,6 @@ impl GridSubdivision {
 
         // Validated in new() that subgrid_shape[axis] > 0 and
         // maximum_orthant[axis] >= minimum_orthant[axis] for all axes
-        #[allow(clippy::cast_sign_loss)]
         let total_subgrids: usize = (0..dim)
             .map(|axis| {
                 let range = self.maximum_orthant[axis] - self.minimum_orthant[axis] + 1;

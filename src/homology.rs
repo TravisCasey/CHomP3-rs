@@ -1,6 +1,5 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 //! Discrete Morse theory for homology computation.
 //!
@@ -29,20 +28,17 @@
 //!
 //! ```
 //! use chomp3rs::{
-//!     CellComplex, CoreductionMatching, Cyclic, HashMapModule, ModuleLike,
-//!     MorseMatching, RingLike,
+//!     CellComplex, Chain, CoreductionMatching, F2, MorseMatching, Ring,
 //! };
 //!
 //! // Create a line segment: two vertices and one edge
-//! type Module = HashMapModule<u32, Cyclic<2>>;
+//! let mut boundaries: Vec<Chain<u32, F2>> = vec![Chain::new(); 3];
+//! boundaries[2].insert_or_add(1, F2::one());
+//! boundaries[2].insert_or_add(0, -F2::one());
 //!
-//! let mut boundaries = vec![Module::new(), Module::new(), Module::new()];
-//! boundaries[2].insert_or_add(1, Cyclic::one());
-//! boundaries[2].insert_or_add(0, -Cyclic::one());
-//!
-//! let mut coboundaries = vec![Module::new(), Module::new(), Module::new()];
-//! coboundaries[0].insert_or_add(2, -Cyclic::one());
-//! coboundaries[1].insert_or_add(2, Cyclic::one());
+//! let mut coboundaries: Vec<Chain<u32, F2>> = vec![Chain::new(); 3];
+//! coboundaries[0].insert_or_add(2, -F2::one());
+//! coboundaries[1].insert_or_add(2, F2::one());
 //!
 //! let complex = CellComplex::new(
 //!     vec![0, 0, 1], // dimensions
@@ -52,8 +48,7 @@
 //! );
 //!
 //! // Use CoreductionMatching to reduce the complex
-//! let mut matching = CoreductionMatching::new();
-//! matching.compute_matching(complex);
+//! let matching: CoreductionMatching<_> = CoreductionMatching::new(complex);
 //!
 //! // Line segment is contractible: reduces to a single point
 //! assert_eq!(matching.critical_cells().len(), 1);
@@ -66,18 +61,62 @@
 //! - Harker, Mischaikow, Mrozek, and Nanda, *Discrete Morse Theoretic
 //!   Algorithms for Computing Homology of Complexes and Maps*.
 
-use std::{cmp::Reverse, collections::BinaryHeap};
+use std::{cmp::Reverse, collections::BinaryHeap, fmt::Debug, hash::Hash};
 
 pub use coreduction::CoreductionMatching;
 pub use cubical::{TopCubicalMatching, TopCubicalMatchingBuilder};
 pub use morse::CellMatch;
 
-use crate::{CellComplex, ComplexLike, Grader, ModuleLike, RingLike};
+use crate::{CellComplex, Chain, Complex, Grader, Ring};
 
 mod coreduction;
 pub mod cubical;
 mod linked_list;
 mod morse;
+
+// Macro to generate `full_reduce` with cfg-gated serde bounds on `PM`.
+// When `mpi` is enabled, `PM` must be serializable so that specialized
+// overrides can broadcast results across processes.
+macro_rules! define_full_reduce {
+    ($($bound:path),* $(,)?) => {
+        /// Fully reduce `self` via discrete Morse theory until no further
+        /// reduction is possible.
+        ///
+        /// This method builds the Morse complex from `self`, then repeatedly
+        /// applies `factory` to the resulting Morse complexes until the cell
+        /// count no longer decreases.
+        ///
+        /// # Matching Types
+        ///
+        /// The first matching (`self`) can exploit special structure in the
+        /// original complex (e.g., [`TopCubicalMatching`] for cubical
+        /// complexes). However, the resulting Morse complex is a general
+        /// [`CellComplex`], so subsequent matchings use a general-purpose
+        /// algorithm. Pass [`CoreductionMatching::new`] (the function itself,
+        /// not a call to it) as `factory` for this purpose.
+        ///
+        /// # Returns
+        ///
+        /// A tuple of:
+        /// - A vector of the matchings performed after the first step
+        /// - The final Morse complex (no longer reducible via Morse matchings)
+        fn full_reduce<PM>(
+            &self,
+            factory: impl Fn(CellComplex<Self::Ring>) -> PM,
+        ) -> (Vec<PM>, CellComplex<Self::Ring>)
+        where
+            PM: MorseMatching<
+                    UpperCell = u32,
+                    Ring = Self::Ring,
+                    UpperComplex = CellComplex<Self::Ring>,
+                >
+                $(+ $bound)*,
+        {
+            let morse_complex = self.construct_morse_complex();
+            full_reduce_sequential(factory, morse_complex)
+        }
+    };
+}
 
 /// The interface for computing an acyclic partial matching for discrete Morse
 /// theoretic cell complex reductions.
@@ -93,26 +132,18 @@ mod morse;
 ///   complex.
 ///
 /// This trichotomy is encapsulated in [`CellMatch`]. Types implementing this
-/// trait compute the matching and provide:
+/// trait compute the matching at construction time and provide:
 /// - Critical cells via [`MorseMatching::critical_cells`]
 /// - Boundary operators via [`MorseMatching::boundary_and_coboundary`]
 /// - The reduced Morse complex via [`MorseMatching::construct_morse_complex`]
 ///
 /// # Workflow
 ///
-/// 1. Create a matching instance (e.g., `CoreductionMatching::new()`)
-/// 2. Call [`compute_matching`](MorseMatching::compute_matching) with the
-///    complex
-/// 3. Use [`construct_morse_complex`](MorseMatching::construct_morse_complex)
-///    to get the reduced complex
-/// 4. Optionally, use [`full_reduce`](MorseMatching::full_reduce) to iterate
-///    until no further reduction is possible
-///
-/// # Panics
-///
-/// Most methods panic if called before
-/// [`compute_matching`](MorseMatching::compute_matching). The panic message
-/// will indicate that `compute_matching` must be called first.
+/// 1. Construct the matching with the complex (e.g.,
+///    `CoreductionMatching::new(complex)`); computation happens here.
+/// 2. Use the resulting matching to query critical cells, build the Morse
+///    complex, or further reduce with
+///    [`full_reduce`](MorseMatching::full_reduce).
 ///
 /// # References
 ///
@@ -125,30 +156,16 @@ where
 {
     /// Cell type of the parent cell complex.
     ///
-    /// Must be equivalent to `<Self::UpperComplex as ComplexLike>::Cell` and
-    /// `<Self::UpperModule as ModuleLike>::Cell`.
-    type UpperCell: Clone + Eq;
+    /// Must be equivalent to `<Self::UpperComplex as Complex>::Cell`.
+    type UpperCell: Clone + Debug + Eq + Hash;
 
     /// Coefficient ring type of the complex.
     ///
-    /// Must be equivalent to `<Self::UpperComplex as ComplexLike>::Ring` and
-    /// `<Self::UpperModule as ModuleLike>::Ring`.
-    type Ring: RingLike;
-
-    /// Module type for (co)chains in the parent cell complex.
-    ///
-    /// Must be equivalent to `<Self::UpperComplex as ComplexLike>::Module`.
-    type UpperModule: ModuleLike<Cell = Self::UpperCell, Ring = Self::Ring>;
-
-    /// Module type for (co)chains in the reduced Morse complex.
-    ///
-    /// The cell type of the Morse complex is always `u32`, representing indices
-    /// into the critical cells vector. The ring type matches the parent
-    /// complex.
-    type LowerModule: ModuleLike<Cell = u32, Ring = Self::Ring>;
+    /// Must be equivalent to `<Self::UpperComplex as Complex>::Ring`.
+    type Ring: Ring;
 
     /// The parent cell complex type on which the matching is performed.
-    type UpperComplex: ComplexLike<Cell = Self::UpperCell, Ring = Self::Ring, Module = Self::UpperModule>;
+    type UpperComplex: Complex<Cell = Self::UpperCell, Ring = Self::Ring>;
 
     /// Priority type for ordering cells during (co)lowering and (co)lifting.
     ///
@@ -161,37 +178,20 @@ where
     /// details.
     type Priority: Ord;
 
-    /// Compute an acyclic partial matching on the given cell complex.
-    ///
-    /// This method takes ownership of `complex` and determines the critical
-    /// (ace) cells, preparing for construction of the reduced Morse complex.
-    ///
-    /// After calling this method, other methods like
-    /// [`construct_morse_complex`](MorseMatching::construct_morse_complex) and
-    /// [`critical_cells`](MorseMatching::critical_cells) become available.
-    fn compute_matching(&mut self, complex: Self::UpperComplex);
-
     /// Construct the Morse complex from this acyclic partial matching.
     ///
     /// The resulting [`CellComplex`] has one cell (of type `u32`) for each
     /// critical cell found in the matching. These cells correspond to indices
-    /// into the vector returned by
+    /// into the slice returned by
     /// [`critical_cells`](MorseMatching::critical_cells).
-    ///
-    /// # Panics
-    ///
-    /// Panics if [`compute_matching`](MorseMatching::compute_matching) has not
-    /// been called previously.
     ///
     /// # References
     ///
     /// For theoretical background, see Forman, *A user's guide to discrete
     /// Morse theory*.
     #[must_use]
-    fn construct_morse_complex(&self) -> CellComplex<Self::LowerModule> {
-        let upper = self
-            .get_upper_complex()
-            .unwrap_or_else(|| panic!("matching not yet computed; call compute_matching first"));
+    fn construct_morse_complex(&self) -> CellComplex<Self::Ring> {
+        let upper = self.upper_complex();
 
         let critical_cells = self.critical_cells();
         let cell_dimensions = critical_cells
@@ -206,77 +206,29 @@ where
         CellComplex::new(cell_dimensions, grades, boundaries, coboundaries)
     }
 
-    /// Fully reduce `complex` via discrete Morse theory until no further
-    /// reduction is possible.
-    ///
-    /// This method first applies `self` to `complex`, then repeatedly applies
-    /// clones of `generic_matching` to the resulting Morse complexes until the
-    /// cell count no longer decreases.
-    ///
-    /// # Matching Types
-    ///
-    /// The first matching (`self`) can exploit special structure in `complex`
-    /// (e.g., [`TopCubicalMatching`] for cubical complexes). However, the
-    /// resulting Morse complex is a general [`CellComplex`], so subsequent
-    /// matchings use a general-purpose algorithm like [`CoreductionMatching`].
-    ///
-    /// # Returns
-    ///
-    /// A tuple of:
-    /// - A vector of the matchings performed after the first step
-    /// - The final Morse complex (no longer reducible via Morse matchings)
-    fn full_reduce<PM>(
-        &mut self,
-        generic_matching: PM,
-        complex: Self::UpperComplex,
-    ) -> (Vec<PM>, CellComplex<Self::LowerModule>)
-    where
-        PM: MorseMatching<
-                UpperCell = u32,
-                Ring = Self::Ring,
-                UpperModule = Self::LowerModule,
-                LowerModule = Self::LowerModule,
-                UpperComplex = CellComplex<Self::LowerModule>,
-            > + Clone,
-    {
-        self.compute_matching(complex);
-        let mut morse_complex = Some(self.construct_morse_complex());
-        let mut cell_count = morse_complex.as_ref().unwrap().cell_count();
-        let mut further_matchings = Vec::new();
-
-        loop {
-            let mut next_matching = generic_matching.clone();
-            next_matching.compute_matching(morse_complex.take().unwrap());
-            if next_matching.critical_cells().len() as u32 == cell_count {
-                return (
-                    further_matchings,
-                    next_matching.take_upper_complex().unwrap(),
-                );
-            }
-            morse_complex = Some(next_matching.construct_morse_complex());
-            cell_count = morse_complex.as_ref().unwrap().cell_count();
-            further_matchings.push(next_matching);
-        }
-    }
+    // The `full_reduce` default method requires serde bounds on `PM` when
+    // the `mpi` feature is enabled, because specialized overrides (e.g.,
+    // `TopCubicalMatching`) broadcast `PM` across MPI processes. A macro
+    // avoids duplicating the documentation between the two cfg variants.
+    #[cfg(not(feature = "mpi"))]
+    define_full_reduce!();
+    #[cfg(feature = "mpi")]
+    define_full_reduce!(serde::Serialize, serde::de::DeserializeOwned);
 
     /// Return a reference to the parent cell complex.
-    ///
-    /// Returns `Some` if [`compute_matching`](MorseMatching::compute_matching)
-    /// has been called, `None` otherwise.
-    fn get_upper_complex(&self) -> Option<&Self::UpperComplex>;
+    #[must_use]
+    fn upper_complex(&self) -> &Self::UpperComplex;
 
     /// Consume the matching and return the parent cell complex.
-    ///
-    /// Returns `Some` if [`compute_matching`](MorseMatching::compute_matching)
-    /// has been called, `None` otherwise.
-    fn take_upper_complex(self) -> Option<Self::UpperComplex>;
+    #[must_use]
+    fn into_upper_complex(self) -> Self::UpperComplex;
 
     /// Return the critical (ace) cells found by the matching algorithm.
     ///
     /// These are the cells that form the reduced Morse complex. The order of
-    /// cells in the returned vector defines their indices in the Morse complex.
+    /// cells in the returned slice defines their indices in the Morse complex.
     #[must_use]
-    fn critical_cells(&self) -> Vec<Self::UpperCell>;
+    fn critical_cells(&self) -> &[Self::UpperCell];
 
     /// Project a cell from the parent complex to the Morse complex.
     ///
@@ -286,7 +238,7 @@ where
     /// The returned index is consistent with
     /// [`critical_cells`](MorseMatching::critical_cells).
     #[must_use]
-    fn project_cell(&self, cell: Self::UpperCell) -> Option<u32>;
+    fn project_cell(&self, cell: &Self::UpperCell) -> Option<u32>;
 
     /// Project a chain from the parent complex onto its critical cells.
     ///
@@ -295,10 +247,13 @@ where
     /// [`lower`](MorseMatching::lower) or [`colower`](MorseMatching::colower).
     ///
     /// This method is primarily for translating between module/cell types.
-    fn project(&self, chain: Self::UpperModule) -> Self::LowerModule {
-        let mut projected_chain = Self::LowerModule::new();
+    fn project(
+        &self,
+        chain: impl IntoIterator<Item = (Self::UpperCell, Self::Ring)>,
+    ) -> Chain<u32, Self::Ring> {
+        let mut projected_chain = Chain::new();
         for (cell, coefficient) in chain {
-            if let Some(projected_cell) = self.project_cell(cell) {
+            if let Some(projected_cell) = self.project_cell(&cell) {
                 projected_chain.insert_or_add(projected_cell, coefficient);
             }
         }
@@ -322,8 +277,11 @@ where
     /// [`colift`](MorseMatching::colift).
     ///
     /// This method is primarily for translating between module/cell types.
-    fn include(&self, chain: Self::LowerModule) -> Self::UpperModule {
-        let mut included_chain = Self::UpperModule::new();
+    fn include(
+        &self,
+        chain: impl IntoIterator<Item = (u32, Self::Ring)>,
+    ) -> Chain<Self::UpperCell, Self::Ring> {
+        let mut included_chain = Chain::new();
         for (cell, coefficient) in chain {
             included_chain.insert_or_add(self.include_cell(cell), coefficient);
         }
@@ -340,23 +298,25 @@ where
     /// - Second: coboundaries of each critical cell
     ///
     /// The order matches [`critical_cells`](MorseMatching::critical_cells).
-    ///
-    /// # Panics
-    ///
-    /// Panics if [`compute_matching`](MorseMatching::compute_matching) has not
-    /// been called.
-    fn boundary_and_coboundary(&self) -> (Vec<Self::LowerModule>, Vec<Self::LowerModule>) {
-        let upper = self
-            .get_upper_complex()
-            .unwrap_or_else(|| panic!("matching not yet computed; call compute_matching first"));
-
+    #[allow(clippy::type_complexity)]
+    fn boundary_and_coboundary(
+        &self,
+    ) -> (Vec<Chain<u32, Self::Ring>>, Vec<Chain<u32, Self::Ring>>) {
+        let upper = self.upper_complex();
         let critical_cells = self.critical_cells();
-        let mut boundaries = Vec::with_capacity(critical_cells.len());
-        let mut coboundaries = Vec::with_capacity(critical_cells.len());
 
-        for cell in &critical_cells {
+        let mut boundaries = Vec::with_capacity(critical_cells.len());
+        for cell in critical_cells {
             boundaries.push(self.lower(upper.cell_boundary(cell)));
-            coboundaries.push(self.lower(upper.cell_coboundary(cell)));
+        }
+
+        // Coboundaries are the transpose of the boundary matrix
+        let mut coboundaries: Vec<Chain<u32, Self::Ring>> =
+            (0..critical_cells.len()).map(|_| Chain::new()).collect();
+        for (cell, boundary) in boundaries.iter().enumerate() {
+            for (bd_cell, coef) in boundary {
+                *coboundaries[*bd_cell as usize].coefficient_mut(&(cell as u32)) = coef.clone();
+            }
         }
 
         (boundaries, coboundaries)
@@ -384,28 +344,55 @@ where
     /// This is a **chain map**: it commutes with boundary operators and maps
     /// cycles to cycles. The resulting chain has support only on critical
     /// cells.
-    ///
-    /// # Panics
-    ///
-    /// Panics if [`compute_matching`](MorseMatching::compute_matching) has not
-    /// been called.
-    fn lower(&self, chain: Self::UpperModule) -> Self::LowerModule {
-        let upper = self
-            .get_upper_complex()
-            .unwrap_or_else(|| panic!("matching not yet computed; call compute_matching first"));
+    fn lower(
+        &self,
+        chain: impl IntoIterator<Item = (Self::UpperCell, Self::Ring)>,
+    ) -> Chain<u32, Self::Ring> {
+        let upper = self.upper_complex();
 
         // Remaining queens and coefficients to be eliminated
-        let mut queen_chain = Self::UpperModule::new();
+        let mut queen_chain = Chain::<Self::UpperCell, Self::Ring>::new();
         // Result chain with only critical (ace) cells
-        let mut lowered_chain = Self::LowerModule::new();
-        // Current chain being processed
-        let mut boundary_chain = chain;
+        let mut lowered_chain = Chain::<u32, Self::Ring>::new();
 
         // Min heap via Reverse(_)
         let mut queen_queue = BinaryHeap::new();
-        loop {
-            // Categorize cells as queens or aces
-            for (cell, coef) in boundary_chain {
+
+        // Categorize initial input
+        for (cell, coef) in chain {
+            let match_result = self.match_cell(&cell);
+            match match_result {
+                CellMatch::Queen { .. } => {
+                    queen_chain.insert_or_add(cell, coef);
+                    queen_queue.push(Reverse(match_result));
+                },
+                CellMatch::Ace { .. } => {
+                    lowered_chain.insert_or_add(
+                        self.project_cell(&cell)
+                            .expect("project_cell returned None on critical cell"),
+                        coef,
+                    );
+                },
+                CellMatch::King { .. } => (),
+            }
+        }
+
+        // Eliminate queens
+        while let Some(Reverse(CellMatch::Queen {
+            cell,
+            king,
+            incidence,
+            ..
+        })) = pop_until(&mut queen_queue, |item| {
+            if let CellMatch::Queen { cell, .. } = &item.0 {
+                return queen_chain.coefficient(cell) != Self::Ring::zero();
+            }
+            panic!("Queen queue populated with non-queen cell");
+        }) {
+            let queen_coefficient = queen_chain.coefficient(&cell);
+            // Incidence between matched cells must be invertible
+            let cancel_coefficient = -queen_coefficient * incidence.invert().unwrap();
+            for (cell, coef) in upper.cell_boundary(&king).scalar_mul(&cancel_coefficient) {
                 let match_result = self.match_cell(&cell);
                 match match_result {
                     CellMatch::Queen { .. } => {
@@ -414,7 +401,7 @@ where
                     },
                     CellMatch::Ace { .. } => {
                         lowered_chain.insert_or_add(
-                            self.project_cell(cell)
+                            self.project_cell(&cell)
                                 .expect("project_cell returned None on critical cell"),
                             coef,
                         );
@@ -422,56 +409,32 @@ where
                     CellMatch::King { .. } => (),
                 }
             }
-
-            // Find next queen with nonzero coefficient
-            if let Some(Reverse(CellMatch::Queen {
-                cell,
-                king,
-                incidence,
-                ..
-            })) = pop_until(&mut queen_queue, |item| {
-                if let CellMatch::Queen { cell, .. } = &item.0 {
-                    return queen_chain.coefficient(cell) != Self::Ring::zero();
-                }
-                panic!("Queen queue populated with non-queen cell");
-            }) {
-                let queen_coefficient = queen_chain.coefficient(&cell);
-                let cancel_coefficient = -queen_coefficient * incidence.invert();
-                boundary_chain = upper.cell_boundary(&king).scalar_mul(cancel_coefficient);
-            } else {
-                break;
-            }
         }
 
-        debug_assert_eq!(queen_chain, Self::UpperModule::new());
+        debug_assert_eq!(queen_chain, Chain::new());
         lowered_chain
     }
 
     /// Lower a single cell from the parent complex to the Morse complex.
     ///
-    /// Convenience method equivalent to `self.lower(singleton_chain(cell, 1))`.
-    fn lower_cell(&self, cell: Self::UpperCell) -> Self::LowerModule {
-        let mut cell_chain = Self::UpperModule::new();
-        cell_chain.insert_or_add(cell, Self::Ring::one());
-        self.lower(cell_chain)
+    /// Convenience method equivalent to lowering a singleton chain with unit
+    /// coefficient.
+    fn lower_cell(&self, cell: Self::UpperCell) -> Chain<u32, Self::Ring> {
+        self.lower([(cell, Self::Ring::one())])
     }
 
     /// Lift a chain from the Morse complex to the parent complex.
     ///
     /// This is a **chain map**: it commutes with boundary operators and maps
     /// cycles to cycles.
-    ///
-    /// # Panics
-    ///
-    /// Panics if [`compute_matching`](MorseMatching::compute_matching) has not
-    /// been called.
-    fn lift(&self, chain: Self::LowerModule) -> Self::UpperModule {
-        let upper = self
-            .get_upper_complex()
-            .unwrap_or_else(|| panic!("matching not yet computed; call compute_matching first"));
+    fn lift(
+        &self,
+        chain: impl IntoIterator<Item = (u32, Self::Ring)>,
+    ) -> Chain<Self::UpperCell, Self::Ring> {
+        let upper = self.upper_complex();
 
         // Remaining queens and coefficients to be eliminated
-        let mut queen_chain = Self::UpperModule::new();
+        let mut queen_chain = Chain::<Self::UpperCell, Self::Ring>::new();
         // Result chain in the upper complex
         let mut lifted_chain = self.include(chain);
         // Current boundary being processed
@@ -502,27 +465,25 @@ where
                 panic!("Queen queue populated with non-queen cell");
             }) {
                 let queen_coefficient = queen_chain.coefficient(&cell);
-                let cancel_coefficient = -queen_coefficient * incidence.invert();
-                boundary_chain = upper
-                    .cell_boundary(&king)
-                    .scalar_mul(cancel_coefficient.clone());
+                // Incidence between matched cells must be invertible
+                let cancel_coefficient = -queen_coefficient * incidence.invert().unwrap();
+                boundary_chain = upper.cell_boundary(&king).scalar_mul(&cancel_coefficient);
                 lifted_chain.insert_or_add(king.clone(), cancel_coefficient);
             } else {
                 break;
             }
         }
 
-        debug_assert_eq!(queen_chain, Self::UpperModule::new());
+        debug_assert_eq!(queen_chain, Chain::new());
         lifted_chain
     }
 
     /// Lift a single Morse complex cell to the parent complex.
     ///
-    /// Convenience method equivalent to `self.lift(singleton_chain(cell, 1))`.
-    fn lift_cell(&self, cell: u32) -> Self::UpperModule {
-        let mut cell_chain = Self::LowerModule::new();
-        cell_chain.insert_or_add(cell, Self::Ring::one());
-        self.lift(cell_chain)
+    /// Convenience method equivalent to lifting a singleton chain with unit
+    /// coefficient.
+    fn lift_cell(&self, cell: u32) -> Chain<Self::UpperCell, Self::Ring> {
+        self.lift([(cell, Self::Ring::one())])
     }
 
     /// Lower a cochain from the parent complex to the Morse complex.
@@ -530,28 +491,58 @@ where
     /// This is a **cochain map**: it commutes with coboundary operators and
     /// maps cocycles to cocycles. Queens and kings are reversed compared to
     /// [`lower`](MorseMatching::lower).
-    ///
-    /// # Panics
-    ///
-    /// Panics if [`compute_matching`](MorseMatching::compute_matching) has not
-    /// been called.
-    fn colower(&self, cochain: Self::UpperModule) -> Self::LowerModule {
-        let upper = self
-            .get_upper_complex()
-            .unwrap_or_else(|| panic!("matching not yet computed; call compute_matching first"));
+    fn colower(
+        &self,
+        cochain: impl IntoIterator<Item = (Self::UpperCell, Self::Ring)>,
+    ) -> Chain<u32, Self::Ring> {
+        let upper = self.upper_complex();
 
         // Remaining kings to be eliminated
-        let mut king_cochain = Self::UpperModule::new();
+        let mut king_cochain = Chain::<Self::UpperCell, Self::Ring>::new();
         // Result cochain with only critical cells
-        let mut colowered_cochain = Self::LowerModule::new();
-        // Current cochain being processed
-        let mut coboundary_cochain = cochain.clone();
+        let mut colowered_cochain = Chain::<u32, Self::Ring>::new();
 
         // Max heap
         let mut king_queue = BinaryHeap::new();
-        loop {
-            // Categorize cells as kings or aces
-            for (cell, coef) in coboundary_cochain {
+
+        // Categorize initial input
+        for (cell, coef) in cochain {
+            let match_result = self.match_cell(&cell);
+            match match_result {
+                CellMatch::King { .. } => {
+                    king_cochain.insert_or_add(cell, coef);
+                    king_queue.push(match_result);
+                },
+                CellMatch::Ace { .. } => {
+                    colowered_cochain.insert_or_add(
+                        self.project_cell(&cell)
+                            .expect("project_cell returned None on critical cell"),
+                        coef,
+                    );
+                },
+                CellMatch::Queen { .. } => (),
+            }
+        }
+
+        // Eliminate kings
+        while let Some(CellMatch::King {
+            cell,
+            queen,
+            incidence,
+            ..
+        }) = pop_until(&mut king_queue, |item| {
+            if let CellMatch::King { cell, .. } = &item {
+                return king_cochain.coefficient(cell) != Self::Ring::zero();
+            }
+            panic!("King queue populated with non-king cell");
+        }) {
+            let king_coefficient = king_cochain.coefficient(&cell);
+            // Incidence between matched cells must be invertible
+            let cancel_coefficient = -king_coefficient * incidence.invert().unwrap();
+            for (cell, coef) in upper
+                .cell_coboundary(&queen)
+                .scalar_mul(&cancel_coefficient)
+            {
                 let match_result = self.match_cell(&cell);
                 match match_result {
                     CellMatch::King { .. } => {
@@ -560,7 +551,7 @@ where
                     },
                     CellMatch::Ace { .. } => {
                         colowered_cochain.insert_or_add(
-                            self.project_cell(cell)
+                            self.project_cell(&cell)
                                 .expect("project_cell returned None on critical cell"),
                             coef,
                         );
@@ -568,39 +559,18 @@ where
                     CellMatch::Queen { .. } => (),
                 }
             }
-
-            // Find next king with nonzero coefficient
-            if let Some(CellMatch::King {
-                cell,
-                queen,
-                incidence,
-                ..
-            }) = pop_until(&mut king_queue, |item| {
-                if let CellMatch::King { cell, .. } = &item {
-                    return king_cochain.coefficient(cell) != Self::Ring::zero();
-                }
-                panic!("King queue populated with non-king cell");
-            }) {
-                let king_coefficient = king_cochain.coefficient(&cell);
-                let cancel_coefficient = -king_coefficient * incidence.invert();
-                coboundary_cochain = upper.cell_coboundary(&queen).scalar_mul(cancel_coefficient);
-            } else {
-                break;
-            }
         }
 
-        debug_assert_eq!(king_cochain, Self::UpperModule::new());
+        debug_assert_eq!(king_cochain, Chain::new());
         colowered_cochain
     }
 
     /// Lower a single cell as a cochain from the parent complex.
     ///
-    /// Convenience method equivalent to `self.colower(singleton_cochain(cell,
-    /// 1))`.
-    fn colower_cell(&self, cell: Self::UpperCell) -> Self::LowerModule {
-        let mut cell_cochain = Self::UpperModule::new();
-        cell_cochain.insert_or_add(cell, Self::Ring::one());
-        self.colower(cell_cochain)
+    /// Convenience method equivalent to colowering a singleton cochain with
+    /// unit coefficient.
+    fn colower_cell(&self, cell: Self::UpperCell) -> Chain<u32, Self::Ring> {
+        self.colower([(cell, Self::Ring::one())])
     }
 
     /// Lift a cochain from the Morse complex to the parent complex.
@@ -608,18 +578,14 @@ where
     /// This is a **cochain map**: it commutes with coboundary operators and
     /// maps cocycles to cocycles. Queens and kings are reversed compared to
     /// [`lift`](MorseMatching::lift).
-    ///
-    /// # Panics
-    ///
-    /// Panics if [`compute_matching`](MorseMatching::compute_matching) has not
-    /// been called.
-    fn colift(&self, cochain: Self::LowerModule) -> Self::UpperModule {
-        let upper = self
-            .get_upper_complex()
-            .unwrap_or_else(|| panic!("matching not yet computed; call compute_matching first"));
+    fn colift(
+        &self,
+        cochain: impl IntoIterator<Item = (u32, Self::Ring)>,
+    ) -> Chain<Self::UpperCell, Self::Ring> {
+        let upper = self.upper_complex();
 
         // Remaining kings to be eliminated
-        let mut king_cochain = Self::UpperModule::new();
+        let mut king_cochain = Chain::<Self::UpperCell, Self::Ring>::new();
         // Result cochain in the upper complex
         let mut colifted_cochain = self.include(cochain);
         // Current coboundary being processed
@@ -650,28 +616,107 @@ where
                 panic!("King queue populated with non-king cell");
             }) {
                 let king_coefficient = king_cochain.coefficient(&cell);
-                let cancel_coefficient = -king_coefficient * incidence.invert();
+                // Incidence between matched cells must be invertible
+                let cancel_coefficient = -king_coefficient * incidence.invert().unwrap();
                 coboundary_cochain = upper
                     .cell_coboundary(&queen)
-                    .scalar_mul(cancel_coefficient.clone());
+                    .scalar_mul(&cancel_coefficient);
                 colifted_cochain.insert_or_add(queen.clone(), cancel_coefficient);
             } else {
                 break;
             }
         }
 
-        debug_assert_eq!(king_cochain, Self::UpperModule::new());
+        debug_assert_eq!(king_cochain, Chain::new());
         colifted_cochain
     }
 
     /// Lift a single Morse complex cell as a cochain to the parent complex.
     ///
-    /// Convenience method equivalent to `self.colift(singleton_cochain(cell,
-    /// 1))`.
-    fn colift_cell(&self, cell: u32) -> Self::UpperModule {
-        let mut cell_cochain = Self::LowerModule::new();
-        cell_cochain.insert_or_add(cell, Self::Ring::one());
-        self.colift(cell_cochain)
+    /// Convenience method equivalent to colifting a singleton cochain with
+    /// unit coefficient.
+    fn colift_cell(&self, cell: u32) -> Chain<Self::UpperCell, Self::Ring> {
+        self.colift([(cell, Self::Ring::one())])
+    }
+
+    /// Lower a chain, including only cells at or above `min_grade`.
+    ///
+    /// This is an optimization for computing chain representatives in
+    /// superlevel sets. The default implementation filters the output of
+    /// [`lower`]; types with specialized matching structures may override
+    /// for efficiency.
+    ///
+    /// [`lower`]: MorseMatching::lower
+    fn lower_capped(
+        &self,
+        chain: impl IntoIterator<Item = (Self::UpperCell, Self::Ring)>,
+        min_grade: u32,
+    ) -> Chain<u32, Self::Ring> {
+        let upper = self.upper_complex();
+        self.lower(chain)
+            .into_iter()
+            .filter(|(cell, _)| upper.grade(&self.include_cell(*cell)) >= min_grade)
+            .collect()
+    }
+
+    /// Lift a chain, including only cells at or above `min_grade`.
+    ///
+    /// This is an optimization for computing chain representatives in
+    /// superlevel sets. The default implementation filters the output of
+    /// [`lift`]; types with specialized matching structures may override
+    /// for efficiency.
+    ///
+    /// [`lift`]: MorseMatching::lift
+    fn lift_capped(
+        &self,
+        chain: impl IntoIterator<Item = (u32, Self::Ring)>,
+        min_grade: u32,
+    ) -> Chain<Self::UpperCell, Self::Ring> {
+        let upper = self.upper_complex();
+        self.lift(chain)
+            .into_iter()
+            .filter(|(cell, _)| upper.grade(cell) >= min_grade)
+            .collect()
+    }
+
+    /// Lower a cochain, including only cells at or below `max_grade`.
+    ///
+    /// This is an optimization for computing cochain representatives in
+    /// sublevel sets. The default implementation filters the output of
+    /// [`colower`]; types with specialized matching structures may override
+    /// for efficiency.
+    ///
+    /// [`colower`]: MorseMatching::colower
+    fn colower_capped(
+        &self,
+        cochain: impl IntoIterator<Item = (Self::UpperCell, Self::Ring)>,
+        max_grade: u32,
+    ) -> Chain<u32, Self::Ring> {
+        let upper = self.upper_complex();
+        self.colower(cochain)
+            .into_iter()
+            .filter(|(cell, _)| upper.grade(&self.include_cell(*cell)) <= max_grade)
+            .collect()
+    }
+
+    /// Lift a cochain, including only cells at or below `max_grade`.
+    ///
+    /// This is an optimization for computing cochain representatives in
+    /// sublevel sets. The default implementation filters the output of
+    /// [`colift`]; types with specialized matching structures may override
+    /// for efficiency.
+    ///
+    /// [`colift`]: MorseMatching::colift
+    fn colift_capped(
+        &self,
+        cochain: impl IntoIterator<Item = (u32, Self::Ring)>,
+        max_grade: u32,
+    ) -> Chain<Self::UpperCell, Self::Ring> {
+        let upper = self.upper_complex();
+        self.colift(cochain)
+            .into_iter()
+            .filter(|(cell, _)| upper.grade(cell) <= max_grade)
+            .collect()
     }
 }
 
@@ -683,4 +728,31 @@ fn pop_until<T: Ord>(heap: &mut BinaryHeap<T>, predicate: impl Fn(&T) -> bool) -
         }
     }
     None
+}
+
+/// Sequential implementation of full reduction via discrete Morse theory.
+///
+/// This is the core logic used by both the default
+/// [`MorseMatching::full_reduce`] implementation and specialized overrides that
+/// need a sequential fallback.
+pub(crate) fn full_reduce_sequential<R, PM>(
+    factory: impl Fn(CellComplex<R>) -> PM,
+    mut morse_complex: CellComplex<R>,
+) -> (Vec<PM>, CellComplex<R>)
+where
+    R: Ring,
+    PM: MorseMatching<UpperCell = u32, Ring = R, UpperComplex = CellComplex<R>>,
+{
+    let mut cell_count = morse_complex.cell_count();
+    let mut further_matchings = Vec::new();
+
+    loop {
+        let next_matching = factory(morse_complex);
+        if next_matching.critical_cells().len() as u32 == cell_count {
+            return (further_matchings, next_matching.into_upper_complex());
+        }
+        morse_complex = next_matching.construct_morse_complex();
+        cell_count = morse_complex.cell_count();
+        further_matchings.push(next_matching);
+    }
 }

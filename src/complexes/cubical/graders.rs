@@ -1,6 +1,5 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 //! Specialized graders for cubical complexes.
 //!
@@ -8,11 +7,7 @@
 //! complexes, including the top cube grader and the orthant trie data structure
 //! for efficient grade lookups.
 
-use std::{
-    iter::zip,
-    ptr::{from_ref, slice_from_raw_parts},
-    slice::ChunksExact,
-};
+use std::{iter::zip, slice::ChunksExact};
 
 use super::{Cube, Orthant};
 use crate::Grader;
@@ -33,7 +28,7 @@ use crate::Grader;
 /// ```rust
 /// use std::collections::HashMap;
 ///
-/// use chomp3rs::{Cube, Grader, HashMapGrader, Orthant, TopCubeGrader};
+/// use chomp3rs::{Cube, Grader, HashGrader, Orthant, TopCubeGrader};
 ///
 /// // Create an orthant grader
 /// let mut orthant_grades = HashMap::new();
@@ -41,7 +36,7 @@ use crate::Grader;
 /// orthant_grades.insert(Orthant::from([0, 1]), 2);
 /// orthant_grades.insert(Orthant::from([1, 0]), 3);
 /// orthant_grades.insert(Orthant::from([1, 1]), 4);
-/// let orthant_grader = HashMapGrader::from_map(orthant_grades, 0);
+/// let orthant_grader = HashGrader::from_map(orthant_grades, 0);
 ///
 /// // Create cube grader with minimum grade for short-circuiting
 /// let cube_grader = TopCubeGrader::new(orthant_grader, Some(1));
@@ -52,10 +47,7 @@ use crate::Grader;
 /// assert_eq!(grade, 1); // minimum of surrounding grades: 1, 2, 3, 4
 /// ```
 #[derive(Clone, Debug)]
-pub struct TopCubeGrader<G>
-where
-    G: Grader<Orthant>,
-{
+pub struct TopCubeGrader<G> {
     orthant_grader: G,
     min_grade: Option<u32>,
 }
@@ -90,6 +82,7 @@ where
 
     /// Return an immutable reference to the wrapped grading function for
     /// orthants (or, top-dimensional cubes).
+    #[must_use]
     pub fn orthant_grader(&self) -> &G {
         &self.orthant_grader
     }
@@ -172,10 +165,12 @@ enum TrieNode<'a> {
         /// `prior_popcount`.
         bitmap: &'a [u16],
 
-        /// The indices (in the vector implementing the trie) to children nodes;
-        /// there is 1 entry for each bit set in `bitmap`. If this is a leaf,
-        /// these are instead grades.
-        child_indices: &'a [u32],
+        /// The indices (in the vector implementing the trie) to children nodes,
+        /// stored as pairs of `u16` values in native byte order (2 slots per
+        /// `u32` value). There is 1 logical entry for each bit set in
+        /// `bitmap`. If this is a leaf, these are instead grades. Use
+        /// [`read_u32`] to extract the `u32` at logical index `i`.
+        child_indices: &'a [u16],
     },
     Compressed {
         /// The length of chunks in `chunks` to compare against.
@@ -188,11 +183,21 @@ enum TrieNode<'a> {
         /// coordinates, `child_indices[i]` is its next index or grade.
         chunks: ChunksExact<'a, i16>,
 
-        /// The indices (in the vector implementing the trie) to children nodes;
-        /// there is 1 entry for each chunk in `chunk`. If this is a leaf, these
-        /// are instead grades.
-        child_indices: &'a [u32],
+        /// The indices (in the vector implementing the trie) to children nodes,
+        /// stored as pairs of `u16` values in native byte order. There is 1
+        /// logical entry for each chunk in `chunks`. If this is a leaf, these
+        /// are instead grades. Use [`read_u32`] to extract the `u32` at logical
+        /// index `i`.
+        child_indices: &'a [u16],
     },
+}
+
+/// Read a `u32` value from a `&[u16]` slice where `u32` values are stored as
+/// pairs of native-endian `u16` values (written via `align_to`).
+fn read_u32(slice: &[u16], index: usize) -> u32 {
+    let lo = slice[2 * index].to_ne_bytes();
+    let hi = slice[2 * index + 1].to_ne_bytes();
+    u32::from_ne_bytes([lo[0], lo[1], hi[0], hi[1]])
 }
 
 impl<'a> TrieNode<'a> {
@@ -230,7 +235,6 @@ impl<'a> TrieNode<'a> {
     ///
     /// These invariants are maintained by `OrthantTrie::build_trie` during
     /// construction and are never violated during normal operation.
-    #[allow(clippy::cast_ptr_alignment)]
     unsafe fn wrap(slice: &'a [u16]) -> Self {
         let discriminant = slice[0];
         if discriminant == 0 {
@@ -238,7 +242,7 @@ impl<'a> TrieNode<'a> {
             //   [discriminant, minimal, bitmap_len, num_children]
             //   + bitmap_len * [prior_popcount]
             //   + bitmap_len * [bitmap]
-            //   + num_children * [child_indices as u32]
+            //   + num_children * [child_indices as u32, stored as 2*u16 each]
             //   + remainder
 
             let minimal = slice[1].cast_signed(); // u16 -> i16 reinterprets bits
@@ -249,18 +253,7 @@ impl<'a> TrieNode<'a> {
             let (prior_popcount, remainder) =
                 unsafe { slice.split_at_unchecked(4).1.split_at_unchecked(bitmap_len) };
             let (bitmap, remainder) = unsafe { remainder.split_at_unchecked(bitmap_len) };
-            let halved_child_indices = unsafe { remainder.split_at_unchecked(2 * num_children).0 };
-
-            // SAFETY: Creating &[u32] from &[u16] is safe because:
-            // - &[u16] slice length is even (2*num_children)
-            // - u16 and u32 have compatible alignment
-            // - casting between integer types preserves bit patterns
-            let child_indices = unsafe {
-                &*slice_from_raw_parts(
-                    from_ref::<[u16]>(halved_child_indices).cast::<u32>(),
-                    num_children,
-                )
-            };
+            let child_indices = unsafe { remainder.split_at_unchecked(2 * num_children).0 };
 
             debug_assert_eq!(
                 prior_popcount[bitmap_len - 1] as usize
@@ -279,7 +272,7 @@ impl<'a> TrieNode<'a> {
             // Compressed node structure:
             //   [discriminant, comp_len, num_children]
             //   + num_children * [comp_len * [comp]]
-            //   + num_children * [child_indices as u32]
+            //   + num_children * [child_indices as u32, stored as 2*u16 each]
             //   + remainder
 
             let comp_len = slice[1] as usize;
@@ -292,18 +285,7 @@ impl<'a> TrieNode<'a> {
                     .1
                     .split_at_unchecked(comp_len * num_children)
             };
-            let halved_child_indices = unsafe { remainder.split_at_unchecked(2 * num_children).0 };
-
-            // SAFETY: Creating &[u32] from &[u16] is safe because:
-            // - &[u16] slice length is even (2*num_children)
-            // - u16 and u32 have compatible alignment
-            // - casting between integer types preserves bit patterns
-            let child_indices = unsafe {
-                &*slice_from_raw_parts(
-                    from_ref::<[u16]>(halved_child_indices).cast::<u32>(),
-                    num_children,
-                )
-            };
+            let child_indices = unsafe { remainder.split_at_unchecked(2 * num_children).0 };
 
             Self::Compressed {
                 comp_len,
@@ -666,7 +648,7 @@ impl OrthantTrie {
                 // current word before bit_flag
                 let prior_in_word = (bitmap_word & (bit_flag - 1)).count_ones() as usize;
                 let child_array_index = prior_popcount[bitmap_word_index] as usize + prior_in_word;
-                let next_node_index = child_indices[child_array_index] as usize;
+                let next_node_index = read_u32(child_indices, child_array_index) as usize;
                 // SAFETY: coords is non-empty (checked at function start), so splitting at 1 is
                 // safe
                 self.search(next_node_index, unsafe { coords.split_at_unchecked(1).1 })
@@ -680,9 +662,10 @@ impl OrthantTrie {
                     if coords[..comp_len] == *chunk {
                         // SAFETY: We just successfully indexed coords[..comp_len], so coords has
                         // at least comp_len elements, making split_at_unchecked(comp_len) safe
-                        return self.search(child_indices[chunk_index] as usize, unsafe {
-                            coords.split_at_unchecked(comp_len).1
-                        });
+                        return self
+                            .search(read_u32(child_indices, chunk_index) as usize, unsafe {
+                                coords.split_at_unchecked(comp_len).1
+                            });
                     }
                 }
                 None
@@ -706,7 +689,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::HashMapGrader;
+    use crate::HashGrader;
 
     #[test]
     fn trie_grader_compressed() {
@@ -743,7 +726,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cast_sign_loss)]
     fn trie_grader_uncompressed() {
         let orthants_and_grades = vec![
             (Orthant::from([0, 2]), 1),
@@ -819,7 +801,7 @@ mod tests {
         orthant_grades.insert(Orthant::from([0, 1]), 2);
         orthant_grades.insert(Orthant::from([1, 0]), 3);
         orthant_grades.insert(Orthant::from([1, 1]), 4);
-        let cube_grader = TopCubeGrader::new(HashMapGrader::from_map(orthant_grades, 0), Some(1));
+        let cube_grader = TopCubeGrader::new(HashGrader::from_map(orthant_grades, 0), Some(1));
 
         // Test vertex cube - should be face of all 4 surrounding top cubes
         let vertex = Cube::vertex(Orthant::from([1, 1]));
@@ -906,7 +888,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cast_sign_loss)]
     fn trie_mixed_compression() {
         // Create a scenario where some branches compress and others don't
         // by using a threshold that's in between the number of children
@@ -947,7 +928,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cast_sign_loss)]
     fn trie_large_dataset() {
         // Test with many entries to stress the trie structure
         let mut orthants = vec![];

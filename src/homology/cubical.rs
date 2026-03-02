@@ -1,6 +1,5 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 //! Efficient discrete Morse matching for cubical complexes.
 //!
@@ -26,21 +25,19 @@
 //!
 //! ```
 //! use chomp3rs::{
-//!     ComplexLike, Cube, CubicalComplex, Cyclic, Grader, HashMapGrader,
-//!     HashMapModule, MorseMatching, Orthant, TopCubeGrader,
-//!     TopCubicalMatching,
+//!     Complex, CubicalComplex, Cyclic, HashGrader, MorseMatching, Orthant,
+//!     TopCubeGrader, TopCubicalMatching,
 //! };
 //!
 //! // Create a cubical complex
 //! let min = Orthant::from([0, 0]);
 //! let max = Orthant::from([3, 3]);
-//! let grader = TopCubeGrader::new(HashMapGrader::new(0), None);
-//! let complex: CubicalComplex<HashMapModule<Cube, Cyclic<7>>, _> =
+//! let grader = TopCubeGrader::new(HashGrader::new(0), None);
+//! let complex: CubicalComplex<Cyclic<7>, _> =
 //!     CubicalComplex::new(min, max, grader);
 //!
-//! // Compute matching with default configuration
-//! let mut matching = TopCubicalMatching::new();
-//! matching.compute_matching(complex);
+//! // Compute matching (happens at construction)
+//! let matching: TopCubicalMatching<_, _> = TopCubicalMatching::new(complex);
 //!
 //! // Access critical cells
 //! let critical_cells = matching.critical_cells();
@@ -50,45 +47,46 @@
 //!
 //! ```
 //! use chomp3rs::{
-//!     Cube, Cyclic, HashMapGrader, HashMapModule, Orthant, TopCubicalMatching,
+//!     CubicalComplex, F2, HashGrader, Orthant, TopCubeGrader,
+//!     TopCubicalMatching,
 //! };
 //!
 //! // Using builder pattern
-//! let matching = TopCubicalMatching::<
-//!     HashMapModule<Cube, Cyclic<2>>,
-//!     HashMapGrader<Orthant>,
-//! >::builder()
-//! .max_grade(0)
-//! .max_dimension(1)
-//! .build::<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Orthant>>();
+//! let min = Orthant::from([0, 0]);
+//! let max = Orthant::from([3, 3]);
+//! let grader = TopCubeGrader::new(HashGrader::new(0), None);
+//! let complex: CubicalComplex<F2, _> = CubicalComplex::new(min, max, grader);
 //!
-//! // Or using convenience constructors
-//! let matching = TopCubicalMatching::<
-//!     HashMapModule<Cube, Cyclic<2>>,
-//!     HashMapGrader<Orthant>,
-//! >::with_max_grade(0);
-//! let matching = TopCubicalMatching::<
-//!     HashMapModule<Cube, Cyclic<2>>,
-//!     HashMapGrader<Orthant>,
-//! >::with_constraints(0, 1);
+//! let matching: TopCubicalMatching<F2, HashGrader<Orthant>> =
+//!     TopCubicalMatching::builder()
+//!         .max_grade(0)
+//!         .max_dimension(1)
+//!         .build(complex);
 //! ```
 
 use std::{collections::HashMap, fmt::Debug, iter::zip};
 
-#[cfg(feature = "chompi")]
-use chompi::{Communicator, MpiExecutor, SimpleCommunicator};
 pub use subgrid::{GridSubdivision, OrthantMatching, Subgrid};
-#[cfg(feature = "chompi")]
+#[cfg(feature = "mpi")]
 use tracing::{info, warn};
-pub use wavefront::{FlowCell, Wavefront, WavefrontConfig};
 
+#[cfg(feature = "mpi")]
+use crate::mpi::{Communicator, MpiExecutor, broadcast};
+#[cfg(feature = "mpi")]
+use crate::{CellComplex, homology::full_reduce_sequential};
 use crate::{
-    CellMatch, ComplexLike, Cube, CubicalComplex, Grader, HashMapModule, ModuleLike, MorseMatching,
-    Orthant, RingLike, TopCubeGrader, dispatch, logging::ProgressTracker,
+    CellMatch, Chain, Complex, Cube, CubicalComplex, Grader, MorseMatching, Orthant, Ring,
+    TopCubeGrader, dispatch, logging::ProgressTracker,
 };
 
+mod builder;
+mod config;
+
+pub use builder::TopCubicalMatchingBuilder;
+pub use config::{ExecutionMode, TopCubicalMatchingConfig};
+
+pub mod flow;
 pub mod subgrid;
-pub mod wavefront;
 
 /// Discrete Morse matching for cubical complexes with top-cube grading.
 ///
@@ -141,7 +139,7 @@ pub mod wavefront;
 ///
 /// # Two-Phase Computation
 ///
-/// The matching is computed in two phases by [`compute_matching`]:
+/// The matching is computed in two phases internally:
 ///
 /// 1. **Critical cell identification**: All critical cells (Aces) in the
 ///    complex are identified
@@ -149,7 +147,7 @@ pub mod wavefront;
 ///    *in the Morse complex* (not the original cubical complex) by flowing
 ///    boundaries through the matching
 ///
-/// After computation, critical cells and their boundaries can be accessed via
+/// After construction, critical cells and their boundaries can be accessed via
 /// the [`MorseMatching`] trait methods and used to construct a [`CellComplex`]
 /// representing the Morse complex.
 ///
@@ -159,143 +157,118 @@ pub mod wavefront;
 /// - Limit critical cells by grade or dimension (optimization for sublevel
 ///   sets)
 /// - Adjust subgrid size for cache efficiency
-/// - Enable MPI distributed computation (requires `chompi` feature)
+/// - Enable MPI distributed computation (requires `mpi` feature)
 ///
-/// See [`TopCubicalMatchingConfig`] and builder methods for details.
+/// See [`TopCubicalMatchingConfig`] and the [builder](Self::builder) for
+/// details.
 ///
-/// [`compute_matching`]: MorseMatching::compute_matching
 /// [`CellComplex`]: crate::CellComplex
 #[derive(Debug, Clone)]
-pub struct TopCubicalMatching<UM, G, LM = HashMapModule<u32, <UM as ModuleLike>::Ring>>
+pub struct TopCubicalMatching<R, G>
 where
-    UM: ModuleLike<Cell = Cube>,
+    R: Ring,
     G: Grader<Orthant>,
 {
-    complex: Option<CubicalComplex<UM, TopCubeGrader<G>>>,
+    complex: CubicalComplex<R, TopCubeGrader<G>>,
     critical_cells: Vec<Cube>,
-    boundaries: Vec<LM>,
+    boundaries: Vec<Chain<u32, R>>,
     projection: HashMap<Cube, u32>,
     config: TopCubicalMatchingConfig,
 }
 
-impl<UM, G> TopCubicalMatching<UM, G>
+impl<R, G> TopCubicalMatching<R, G>
 where
-    UM: ModuleLike<Cell = Cube>,
+    R: Ring,
     G: Grader<Orthant>,
 {
-    /// Creates a matching with default configuration.
-    ///
-    /// All cells are included in the matching regardless of grade or dimension.
-    /// Use the builder pattern or convenience constructors for configuration.
-    ///
-    /// No matching is performed until [`TopCubicalMatching::compute_matching`]
-    /// has been called and thus most methods from the [`MorseMatching`] trait
-    /// implementation will panic if called before.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::from_config(TopCubicalMatchingConfig::default())
-    }
-
-    /// Creates a matching that only finds critical cells up to the given grade.
-    ///
-    /// This can be a key optimization when you only need the (co)homology of
-    /// a complex embedded in a larger one (of higher grade). As matchings
-    /// respect grading, there is no accuracy issue with this constraint.
-    #[must_use]
-    pub fn with_max_grade(max_grade: u32) -> Self {
-        Self::builder().max_grade(max_grade).build()
-    }
-
-    /// Creates a matching that only finds critical cells up to the given
-    /// dimension.
-    ///
-    /// Note that setting the maximum dimension to `d` will only guarantee
-    /// accuracy of homology up to dimensions `d - 1`.
-    #[must_use]
-    pub fn with_max_dimension(max_dimension: u32) -> Self {
-        Self::builder().max_dimension(max_dimension).build()
-    }
-
-    /// Creates a matching with both grade and dimension constraints.
-    ///
-    /// This is equivalent to using the [builder pattern](Self::builder) with
-    /// both constraints, but provides a convenient shorthand for the common
-    /// case of setting both.
-    #[must_use]
-    pub fn with_constraints(max_grade: u32, max_dimension: u32) -> Self {
-        Self::builder()
-            .max_grade(max_grade)
-            .max_dimension(max_dimension)
-            .build()
-    }
-
     /// Returns a builder for detailed configuration.
     #[must_use]
-    pub fn builder() -> TopCubicalMatchingBuilder {
+    pub fn builder() -> TopCubicalMatchingBuilder<R, G> {
         TopCubicalMatchingBuilder::new()
     }
 
-    /// Creates a matching with MPI-based distributed computation enabled.
-    ///
-    /// This constructor requires the `chompi` feature flag. It will attempt to
-    /// initialize the MPI universe and use the world communicator to control
-    /// processes. If MPI initialization fails, the matching will fall back to
-    /// sequential computation with a warning.
-    ///
-    /// This configuration can also be specified using the provided [builder
-    /// pattern](Self::builder).
-    #[cfg(feature = "chompi")]
-    #[must_use]
-    pub fn new_mpi() -> Self {
-        Self::builder().mpi().build()
-    }
-
-    fn from_config(config: TopCubicalMatchingConfig) -> Self {
-        Self {
-            complex: None,
-            critical_cells: Vec::new(),
-            boundaries: Vec::new(),
-            projection: HashMap::new(),
-            config,
-        }
-    }
-
     /// Returns a reference to the matching configuration.
-    ///
-    /// This allows introspection of the constraints and settings used for this
-    /// matching.
     #[must_use]
     pub fn config(&self) -> &TopCubicalMatchingConfig {
         &self.config
     }
 }
 
-impl<UM, G> Default for TopCubicalMatching<UM, G>
+impl<R, G> TopCubicalMatching<R, G>
 where
-    UM: ModuleLike<Cell = Cube>,
-    G: Grader<Orthant>,
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<UM, G> From<TopCubicalMatchingConfig> for TopCubicalMatching<UM, G>
-where
-    UM: ModuleLike<Cell = Cube>,
-    G: Grader<Orthant>,
-{
-    fn from(config: TopCubicalMatchingConfig) -> Self {
-        Self::from_config(config)
-    }
-}
-
-impl<UM, G, LM> TopCubicalMatching<UM, G, LM>
-where
-    UM: ModuleLike<Cell = Cube>,
-    LM: ModuleLike<Cell = u32, Ring = UM::Ring>,
+    R: Ring,
     G: Grader<Orthant> + Clone,
 {
+    /// Compute the matching on `complex` with default configuration.
+    ///
+    /// All cells are included in the matching regardless of grade or dimension.
+    /// Use the [builder pattern](Self::builder) for configuration.
+    #[must_use]
+    pub fn new(complex: CubicalComplex<R, TopCubeGrader<G>>) -> Self {
+        Self::from_config(TopCubicalMatchingConfig::default(), complex)
+    }
+
+    /// Compute the matching using MPI-based distributed computation.
+    ///
+    /// This constructor requires the `mpi` feature flag. It will attempt to
+    /// initialize the MPI universe and use the world communicator to control
+    /// processes. If MPI initialization fails, the matching will fall back to
+    /// sequential computation with a warning.
+    ///
+    /// This configuration can also be specified using the provided [builder
+    /// pattern](Self::builder).
+    #[cfg(feature = "mpi")]
+    #[must_use]
+    pub fn new_mpi(complex: CubicalComplex<R, TopCubeGrader<G>>) -> Self {
+        Self::builder().mpi().build(complex)
+    }
+
+    fn from_config(
+        config: TopCubicalMatchingConfig,
+        complex: CubicalComplex<R, TopCubeGrader<G>>,
+    ) -> Self {
+        let mut matching = Self {
+            complex,
+            critical_cells: Vec::new(),
+            boundaries: Vec::new(),
+            projection: HashMap::new(),
+            config,
+        };
+        matching.compute();
+        matching
+    }
+
+    fn compute(&mut self) {
+        dispatch!(
+            mpi => {
+                if let Some(count) = self.config.execution.process_count() {
+                    if count > 1 {
+                        info!("MPI execution with {count} processes");
+                        self.compute_critical_cells_distributed();
+                        self.compute_boundaries();
+                    } else {
+                        warn!("MPI enabled with single process, using sequential");
+                        self.compute_critical_cells_sequential();
+                        self.compute_boundaries();
+                    }
+                } else {
+                    if matches!(self.config.execution, ExecutionMode::Mpi { comm: None }) {
+                        warn!(
+                            "MPI execution mode enabled but no communicator provided; \
+                             falling back to sequential. Use .mpi_with_comm(comm) to provide one."
+                        );
+                    }
+                    self.compute_critical_cells_sequential();
+                    self.compute_boundaries();
+                }
+            },
+            _ => {
+                self.compute_critical_cells_sequential();
+                self.compute_boundaries();
+            }
+        );
+    }
+
     /// Recursive method used to iterate through the nested `orthant_matching`
     /// to find the match of `cube`.
     ///
@@ -305,19 +278,15 @@ where
         cube: Cube,
         extent: u32,
         orthant_matching: &OrthantMatching,
-    ) -> CellMatch<Cube, UM::Ring, Orthant> {
+    ) -> CellMatch<Cube, R, Orthant> {
         match orthant_matching {
             OrthantMatching::Critical { .. } => CellMatch::Ace { cell: cube },
             OrthantMatching::Leaf { match_axis, .. } => {
-                // Cubical complex incidence (within same orthant):
-                // - 111 <-> 110: incidence -1
-                // - 111 <-> 101: incidence 1
-                // - 111 <-> 011: incidence -1
-                let incidence = if ((extent % (1 << match_axis)).count_ones()).is_multiple_of(2) {
-                    -UM::Ring::one()
-                } else {
-                    UM::Ring::one()
-                };
+                // Cellular incidence [king:queen] is the negation of the flow
+                // coefficient computed by flow::compute_incidence. See the
+                // sign_convention_consistency test and the sign analysis in
+                // the plan documentation.
+                let incidence = -flow::compute_incidence::<R>(extent, *match_axis);
 
                 // If the cube has extent along the match axis, it is a king;
                 // Else, it is a queen.
@@ -392,17 +361,9 @@ where
         }
     }
 
-    /// Compute the orthant matching for a single orthant.
-    fn match_orthant(&self, orthant: &Orthant) -> OrthantMatching {
-        let mut subgrid = Subgrid::new(self.complex.as_ref().unwrap(), u32::MAX, u32::MAX);
-        subgrid.match_subgrid(orthant.clone(), orthant.clone())[0]
-            .2
-            .clone()
-    }
-
     /// Compute critical cells sequentially with progress tracking.
     fn compute_critical_cells_sequential(&mut self) {
-        let complex = self.complex.as_ref().unwrap();
+        let complex = &self.complex;
         let subdivision = GridSubdivision::new(
             complex.minimum().clone(),
             complex.maximum().clone(),
@@ -433,17 +394,12 @@ where
             .collect();
 
         progress.finish();
-
-        // Build projection map
-        for (index, cube) in critical_cells.iter().enumerate() {
-            self.projection.insert(cube.clone(), index as u32);
-        }
-        self.critical_cells = critical_cells;
+        self.store_critical_cells(critical_cells);
     }
 
     /// Compute boundaries for all critical cells.
     fn compute_boundaries(&mut self) {
-        let complex = self.complex.as_ref().unwrap();
+        let complex = &self.complex;
         self.boundaries = self
             .critical_cells
             .iter()
@@ -453,18 +409,38 @@ where
             })
             .collect();
     }
+
+    /// Store critical cells and build the projection map.
+    fn store_critical_cells(&mut self, critical_cells: Vec<Cube>) {
+        for (index, cube) in critical_cells.iter().enumerate() {
+            self.projection.insert(cube.clone(), index as u32);
+        }
+        self.critical_cells = critical_cells;
+    }
 }
 
-#[cfg(feature = "chompi")]
-impl<UM, G, LM> TopCubicalMatching<UM, G, LM>
+#[cfg(feature = "mpi")]
+impl<R, G> TopCubicalMatching<R, G>
 where
-    UM: ModuleLike<Cell = Cube>,
-    LM: ModuleLike<Cell = u32, Ring = UM::Ring>,
+    R: Ring,
     G: Grader<Orthant> + Clone,
 {
     /// Compute critical cells using MPI distributed executor.
-    fn compute_critical_cells_distributed(&mut self, executor: &mut MpiExecutor) {
-        let complex = self.complex.as_ref().unwrap();
+    ///
+    /// After computation, all processes have the sorted critical cells and
+    /// projection map populated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the execution mode is not MPI with a communicator.
+    fn compute_critical_cells_distributed(&mut self) {
+        let comm = self
+            .config
+            .execution
+            .communicator()
+            .expect("compute_critical_cells_distributed requires MPI communicator");
+
+        let complex = &self.complex;
         let subdivision = GridSubdivision::new(
             complex.minimum().clone(),
             complex.maximum().clone(),
@@ -475,79 +451,52 @@ where
         let max_grade = self.config.maximum_critical_grade;
         let max_dim = self.config.maximum_critical_dimension;
 
-        let critical_cells: Vec<Cube> = executor.execute_with_state(
-            "Critical cells",
-            subdivision.into_iter(),
-            || Subgrid::new(complex, max_grade, max_dim),
-            |subgrid, (minimum_orthant, maximum_orthant)| {
-                subgrid
-                    .match_subgrid(minimum_orthant, maximum_orthant)
-                    .into_iter()
-                    .flat_map(|(_, critical, _)| critical)
-                    .collect::<Vec<Cube>>()
-            },
-        );
+        let critical_cells: Vec<Cube> = MpiExecutor::new(comm)
+            .label("Critical cells")
+            .log_level(tracing::Level::INFO)
+            .batch_size(self.config.mpi_batch_size)
+            .broadcast_results()
+            .run_with_state(
+                subdivision.into_iter(),
+                || Subgrid::new(complex, max_grade, max_dim),
+                |subgrid, (minimum_orthant, maximum_orthant)| {
+                    subgrid
+                        .match_subgrid(minimum_orthant, maximum_orthant)
+                        .into_iter()
+                        .flat_map(|(_, critical, _)| critical)
+                        .collect::<Vec<Cube>>()
+                },
+            );
 
-        // Build projection map
-        for (index, cube) in critical_cells.iter().enumerate() {
-            self.projection.insert(cube.clone(), index as u32);
-        }
-        self.critical_cells = critical_cells;
+        self.store_critical_cells(critical_cells);
     }
 }
 
-impl<UM, G, LM> MorseMatching for TopCubicalMatching<UM, G, LM>
+impl<R, G> MorseMatching for TopCubicalMatching<R, G>
 where
-    UM: ModuleLike<Cell = Cube>,
-    LM: ModuleLike<Cell = u32, Ring = UM::Ring>,
+    R: Ring,
     G: Grader<Orthant> + Clone,
 {
-    type LowerModule = LM;
     type Priority = Orthant;
-    type Ring = UM::Ring;
+    type Ring = R;
     type UpperCell = Cube;
-    type UpperComplex = CubicalComplex<UM, TopCubeGrader<G>>;
-    type UpperModule = UM;
+    type UpperComplex = CubicalComplex<R, TopCubeGrader<G>>;
 
-    fn compute_matching(&mut self, complex: Self::UpperComplex) {
-        self.complex = Some(complex);
-        self.critical_cells.clear();
-        self.boundaries.clear();
-        self.projection.clear();
+    fn upper_complex(&self) -> &Self::UpperComplex {
+        &self.complex
+    }
 
-        dispatch!(
-            chompi => {
-                if let ExecutionMode::Mpi { ref comm } = self.config.execution {
-                    let executor = if let Some(c) = comm.as_ref() {
-                        Some(MpiExecutor::new(c))
-                    } else {
-                        MpiExecutor::from_world()
-                    };
-
-                    if let Some(mut executor) = executor {
-                        info!("Initialized MPI executor with {} processes", executor.size());
-                        self.compute_critical_cells_distributed(&mut executor);
-                        self.compute_boundaries();
-                        return;
-                    }
-                    warn!("MPI unavailable, falling back to sequential");
-                }
-                self.compute_critical_cells_sequential();
-            },
-            _ => {
-                self.compute_critical_cells_sequential();
-            }
-        );
-
-        self.compute_boundaries();
+    fn into_upper_complex(self) -> Self::UpperComplex {
+        self.complex
     }
 
     fn match_cell(&self, cube: &Cube) -> CellMatch<Cube, Self::Ring, Self::Priority> {
-        assert!(
-            self.complex.is_some(),
-            "matching not yet computed; call compute_matching first"
-        );
-        let matching = self.match_orthant(cube.base());
+        let matching = {
+            let mut subgrid = Subgrid::new(&self.complex, u32::MAX, u32::MAX);
+            subgrid.match_subgrid(cube.base().clone(), cube.base().clone())[0]
+                .2
+                .clone()
+        };
 
         let mut extent = 0u32;
         for (axis, (base_coord, dual_coord)) in
@@ -561,326 +510,106 @@ where
         Self::match_helper(cube.clone(), extent, &matching)
     }
 
-    fn get_upper_complex(&self) -> Option<&Self::UpperComplex> {
-        self.complex.as_ref()
+    fn critical_cells(&self) -> &[Self::UpperCell] {
+        &self.critical_cells
     }
 
-    fn take_upper_complex(self) -> Option<Self::UpperComplex> {
-        self.complex
-    }
-
-    fn critical_cells(&self) -> Vec<Self::UpperCell> {
-        self.critical_cells.clone()
-    }
-
-    fn project_cell(&self, cell: Self::UpperCell) -> Option<u32> {
-        self.projection.get(&cell).copied()
+    fn project_cell(&self, cell: &Self::UpperCell) -> Option<u32> {
+        self.projection.get(cell).copied()
     }
 
     fn include_cell(&self, cell: u32) -> Self::UpperCell {
         self.critical_cells[cell as usize].clone()
     }
 
-    fn boundary_and_coboundary(&self) -> (Vec<Self::LowerModule>, Vec<Self::LowerModule>) {
-        let mut coboundaries = vec![LM::new(); self.boundaries.len()];
-        for (cell, boundary) in self.boundaries.iter().enumerate() {
-            for (boundary_cell, coef) in boundary.iter() {
-                coboundaries[*boundary_cell as usize].insert_or_add(cell as u32, coef.clone());
-            }
-        }
-        (self.boundaries.clone(), coboundaries)
-    }
-
-    fn lower(&self, chain: Self::UpperModule) -> Self::LowerModule {
-        let complex = self.complex.as_ref().unwrap();
-        let mut wavefront = Wavefront::new(
-            WavefrontConfig::Boundary,
-            complex.minimum().clone(),
-            complex.maximum().clone(),
-        );
-        let mut result = LM::new();
-
-        wavefront.seed(chain);
-
-        while let Some((orthant, orthant_chain)) = wavefront.pop_next() {
-            let matching = self.match_orthant(&orthant);
-
-            wavefront.flow_orthant(&orthant, orthant_chain, &matching, |cell| {
-                if let FlowCell::Ace { extent, coef } = cell {
-                    let lower_cell = self.projection[&wavefront::extent_to_cube(&orthant, extent)];
-                    result.insert_or_add(lower_cell, coef);
-                }
-            });
-        }
-
-        result
-    }
-
-    fn colower(&self, chain: Self::UpperModule) -> Self::LowerModule {
-        let complex = self.complex.as_ref().unwrap();
-        let mut wavefront = Wavefront::new(
-            WavefrontConfig::Coboundary,
-            complex.minimum().clone(),
-            complex.maximum().clone(),
-        );
-        let mut result = LM::new();
-
-        wavefront.seed(chain);
-
-        while let Some((orthant, orthant_chain)) = wavefront.pop_next() {
-            let matching = self.match_orthant(&orthant);
-
-            wavefront.flow_orthant(&orthant, orthant_chain, &matching, |cell| {
-                if let FlowCell::Ace { extent, coef } = cell {
-                    let lower_cell = self.projection[&wavefront::extent_to_cube(&orthant, extent)];
-                    result.insert_or_add(lower_cell, coef);
-                }
-            });
-        }
-
-        result
-    }
-
-    fn lift(&self, chain: Self::LowerModule) -> Self::UpperModule {
-        let complex = self.complex.as_ref().unwrap();
-        let mut wavefront = Wavefront::new(
-            WavefrontConfig::Boundary,
-            complex.minimum().clone(),
-            complex.maximum().clone(),
-        );
-
-        let mut result = UM::new();
-        for (lower_cell, coef) in chain {
-            result.insert_or_add(self.critical_cells[lower_cell as usize].clone(), coef);
-        }
-        wavefront.seed(complex.boundary(&result));
-
-        while let Some((orthant, orthant_chain)) = wavefront.pop_next() {
-            let matching = self.match_orthant(&orthant);
-
-            wavefront.flow_orthant(&orthant, orthant_chain, &matching, |cell| {
-                if let FlowCell::Queen { king_extent, coef } = cell {
-                    let king_cube = wavefront::extent_to_cube(&orthant, king_extent);
-                    result.insert_or_add(king_cube, coef);
-                }
-            });
-        }
-
-        result
-    }
-
-    fn colift(&self, chain: Self::LowerModule) -> Self::UpperModule {
-        let complex = self.complex.as_ref().unwrap();
-        let mut wavefront = Wavefront::new(
-            WavefrontConfig::Coboundary,
-            complex.minimum().clone(),
-            complex.maximum().clone(),
-        );
-
-        let mut result = UM::new();
-        for (lower_cell, coef) in chain {
-            result.insert_or_add(self.critical_cells[lower_cell as usize].clone(), coef);
-        }
-        wavefront.seed(complex.coboundary(&result));
-
-        while let Some((orthant, orthant_chain)) = wavefront.pop_next() {
-            let matching = self.match_orthant(&orthant);
-
-            wavefront.flow_orthant(&orthant, orthant_chain, &matching, |cell| {
-                if let FlowCell::King { queen_extent, coef } = cell {
-                    let queen_cube = wavefront::extent_to_cube(&orthant, queen_extent);
-                    result.insert_or_add(queen_cube, coef);
-                }
-            });
-        }
-
-        result
-    }
-}
-
-/// Execution strategy for computing the top cubical Morse matching.
-///
-/// Controls how the matching computation is parallelized or distributed, if at
-/// all.
-#[derive(Default)]
-pub enum ExecutionMode {
-    /// Single-threaded sequential execution (default).
-    #[default]
-    Sequential,
-    /// MPI-based distributed execution across multiple processes.
-    ///
-    /// Requires the `chompi` feature. If `comm` is `None`, the matching will
-    /// attempt to initialize the MPI universe and use the world communicator.
-    #[cfg(feature = "chompi")]
-    Mpi {
-        /// Communicator for MPI processes, or `None` to use the world
-        /// communicator.
-        comm: Option<SimpleCommunicator>,
-    },
-}
-
-impl Clone for ExecutionMode {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Sequential => Self::Sequential,
-            #[cfg(feature = "chompi")]
-            Self::Mpi { comm } => Self::Mpi {
-                comm: comm.as_ref().map(Communicator::duplicate),
-            },
-        }
-    }
-}
-
-impl Debug for ExecutionMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Sequential => write!(f, "Sequential"),
-            #[cfg(feature = "chompi")]
-            Self::Mpi { comm } => {
-                let comm_str = comm
-                    .as_ref()
-                    .map_or("None".to_string(), |c| format!("Some({})", c.get_name()));
-                write!(f, "Mpi {{ comm: {comm_str} }}")
-            },
-        }
-    }
-}
-
-/// Configuration for [`TopCubicalMatching`].
-///
-/// This type controls which critical cells are identified during matching.
-///
-/// # Fields
-///
-/// - `maximum_critical_grade`: Only cells with grade at most this value are
-///   marked as critical. Set to `u32::MAX` for no constraint.
-/// - `maximum_critical_dimension`: Only cells with dimension at most this value
-///   are marked as critical. Set to `u32::MAX` for no constraint. Note that
-///   setting this to `d` only guarantees accuracy of homology up to dimension
-///   `d - 1`.
-/// - `subgrid_shape`: Optional shape for subdividing the grid of orthants. Each
-///   entry specifies the size along one axis. Larger subgrids improve caching
-///   but may exceed memory limits or contain too many empty orthants.
-/// - `execution`: Execution strategy (sequential or MPI distributed).
-#[derive(Clone, Debug)]
-pub struct TopCubicalMatchingConfig {
-    /// Maximum grade of critical cells to identify.
-    pub maximum_critical_grade: u32,
-    /// Maximum dimension of critical cells to identify.
-    pub maximum_critical_dimension: u32,
-    /// Optional shape for subdividing the grid of orthants for processing.
-    pub subgrid_shape: Option<Vec<i16>>,
-    /// Base orthants of top-dimensional cubes for subgrid filtering. When
-    /// `Some`, only subgrids containing cells of these top-cubes will be
-    /// processed. Since a top-cube's faces extend into neighboring orthants,
-    /// the filtering accounts for this by including subgrids adjacent to each
-    /// provided orthant.
-    pub filter_orthants: Option<Vec<Orthant>>,
-    /// Execution strategy for the matching computation.
-    pub execution: ExecutionMode,
-}
-
-impl Default for TopCubicalMatchingConfig {
-    fn default() -> Self {
-        Self {
-            maximum_critical_grade: u32::MAX,
-            maximum_critical_dimension: u32::MAX,
-            subgrid_shape: None,
-            filter_orthants: None,
-            execution: ExecutionMode::default(),
-        }
-    }
-}
-
-/// Builder pattern helper to build a [`TopCubicalMatching`] object with
-/// various options.
-#[derive(Default)]
-pub struct TopCubicalMatchingBuilder {
-    config: TopCubicalMatchingConfig,
-}
-
-impl TopCubicalMatchingBuilder {
-    /// Create a builder with default configuration.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            config: TopCubicalMatchingConfig::default(),
-        }
-    }
-
-    /// Consume the builder and return the configured [`TopCubicalMatching`]
-    /// object.
-    #[must_use]
-    pub fn build<UM, G>(self) -> TopCubicalMatching<UM, G>
+    #[cfg(feature = "mpi")]
+    fn full_reduce<PM>(
+        &self,
+        factory: impl Fn(CellComplex<Self::Ring>) -> PM,
+    ) -> (Vec<PM>, CellComplex<Self::Ring>)
     where
-        UM: ModuleLike<Cell = Cube>,
-        G: Grader<Orthant>,
+        PM: MorseMatching<
+                UpperCell = u32,
+                Ring = Self::Ring,
+                UpperComplex = CellComplex<Self::Ring>,
+            > + serde::Serialize
+            + serde::de::DeserializeOwned,
     {
-        TopCubicalMatching::from_config(self.config)
+        let morse_complex = self.construct_morse_complex();
+
+        match &self.config.execution {
+            ExecutionMode::Mpi { comm: Some(c) } if c.size() > 1 => {
+                // Root performs the coreduction loop
+                let (further_matchings, final_complex) = if c.rank() == 0 {
+                    full_reduce_sequential(factory, morse_complex)
+                } else {
+                    (Vec::new(), CellComplex::new(vec![], vec![], vec![], vec![]))
+                };
+
+                // Broadcast results to all processes
+                let further_matchings = broadcast(c, &further_matchings);
+                let final_complex = broadcast(c, &final_complex);
+
+                (further_matchings, final_complex)
+            },
+            ExecutionMode::Mpi { comm: Some(_) } => {
+                warn!("MPI enabled with single process, using sequential full_reduce");
+                full_reduce_sequential(factory, morse_complex)
+            },
+            ExecutionMode::Mpi { comm: None } => {
+                warn!("MPI execution mode without communicator, using sequential full_reduce");
+                full_reduce_sequential(factory, morse_complex)
+            },
+            ExecutionMode::Sequential => full_reduce_sequential(factory, morse_complex),
+        }
     }
 
-    /// Set the maximum grade of critical cells found by the matching.
-    #[must_use]
-    pub fn max_grade(mut self, max_grade: u32) -> Self {
-        self.config.maximum_critical_grade = max_grade;
-        self
+    fn lower(&self, chain: impl IntoIterator<Item = (Cube, R)>) -> Chain<u32, R> {
+        flow::lower(self, chain, 0)
     }
 
-    /// Set the maximum dimension of critical cells found by the matching.
-    #[must_use]
-    pub fn max_dimension(mut self, max_dimension: u32) -> Self {
-        self.config.maximum_critical_dimension = max_dimension;
-        self
+    fn lower_capped(
+        &self,
+        chain: impl IntoIterator<Item = (Cube, R)>,
+        min_grade: u32,
+    ) -> Chain<u32, R> {
+        flow::lower(self, chain, min_grade)
     }
 
-    /// Configure the shape of the subgrids of orthants matched together.
-    ///
-    /// Larger subgrids cache results more efficiently, but too large of
-    /// subgrids may exceed contiguous cache capabilities or contain too many
-    /// empty orthants to be efficient.
-    #[must_use]
-    pub fn subgrid_shape(mut self, subgrid_shape: Vec<i16>) -> Self {
-        self.config.subgrid_shape = Some(subgrid_shape);
-        self
+    fn colower(&self, cochain: impl IntoIterator<Item = (Cube, R)>) -> Chain<u32, R> {
+        flow::colower(self, cochain, u32::MAX)
     }
 
-    /// Use MPI to distribute the computation across multiple processes.
-    ///
-    /// The matching will attempt to initialize the MPI universe and use the
-    /// world communicator. For a custom communicator, use
-    /// [`mpi_with_comm`](Self::mpi_with_comm) instead.
-    #[cfg(feature = "chompi")]
-    #[must_use]
-    pub fn mpi(mut self) -> Self {
-        self.config.execution = ExecutionMode::Mpi { comm: None };
-        self
+    fn colower_capped(
+        &self,
+        cochain: impl IntoIterator<Item = (Cube, R)>,
+        max_grade: u32,
+    ) -> Chain<u32, R> {
+        flow::colower(self, cochain, max_grade)
     }
 
-    /// Use MPI with a specific communicator for distributed execution.
-    ///
-    /// The communicator is duplicated, so the original can be used elsewhere.
-    #[cfg(feature = "chompi")]
-    #[must_use]
-    pub fn mpi_with_comm(mut self, comm: &dyn Communicator) -> Self {
-        self.config.execution = ExecutionMode::Mpi {
-            comm: Some(comm.duplicate()),
-        };
-        self
+    fn lift(&self, chain: impl IntoIterator<Item = (u32, R)>) -> Chain<Cube, R> {
+        flow::lift(self, chain, 0)
     }
 
-    /// Enable subgrid filtering with the provided top-cube orthants.
-    ///
-    /// Only subgrids containing cells of the specified top-dimensional cubes
-    /// will be processed. Since each top-cube's faces extend into neighboring
-    /// orthants, the filtering includes subgrids adjacent to each provided
-    /// orthant.
-    ///
-    /// This improves performance for sparse complexes embedded in
-    /// high-dimensional bounding boxes.
-    #[must_use]
-    pub fn filter_orthants(mut self, orthants: Vec<Orthant>) -> Self {
-        self.config.filter_orthants = Some(orthants);
-        self
+    fn lift_capped(
+        &self,
+        chain: impl IntoIterator<Item = (u32, R)>,
+        min_grade: u32,
+    ) -> Chain<Cube, R> {
+        flow::lift(self, chain, min_grade)
+    }
+
+    fn colift(&self, cochain: impl IntoIterator<Item = (u32, R)>) -> Chain<Cube, R> {
+        flow::colift(self, cochain, u32::MAX)
+    }
+
+    fn colift_capped(
+        &self,
+        cochain: impl IntoIterator<Item = (u32, R)>,
+        max_grade: u32,
+    ) -> Chain<Cube, R> {
+        flow::colift(self, cochain, max_grade)
     }
 }
 
@@ -888,90 +617,89 @@ impl TopCubicalMatchingBuilder {
 mod tests {
     use super::*;
     use crate::{
-        ComplexLike, CoreductionMatching, Cube, CubicalComplex, Cyclic, Grader, HashMapGrader,
-        HashMapModule, ModuleLike, Orthant, TopCubeGrader,
+        Chain, Complex, CoreductionMatching, Cube, F2, Grader, HashGrader, Orthant, OrthantTrie,
+        TopCubeGrader,
+        test_complexes::{
+            UniformGrader, assert_all_grade_zero, assert_betti_numbers, complex_from_orthants,
+            sn_orthants, torus_orthants,
+        },
     };
-
-    fn generate_top_cube_torus_orthants() -> Vec<Orthant> {
-        let mut top_cubes = Vec::new();
-        for x in 0..7 {
-            for y in 0..7 {
-                // Create hole in the middle
-                if x == 3 && y == 3 {
-                    continue;
-                }
-                for z in 0..3 {
-                    if z == 1 {
-                        // Make the torus hollow
-                        if (x == 1 || x == 5) && (1..=5).contains(&y) {
-                            continue;
-                        }
-                        if (y == 1 || y == 5) && (1..=5).contains(&x) {
-                            continue;
-                        }
-                    }
-                    top_cubes.push(Orthant::from([x, y, z]));
-                }
-            }
-        }
-
-        top_cubes
-    }
-
-    pub fn top_cube_torus_hashmap()
-    -> CubicalComplex<HashMapModule<Cube, Cyclic<2>>, TopCubeGrader<HashMapGrader<Orthant>>> {
-        let minimum = Orthant::from([0, 0, 0]);
-        let maximum = Orthant::from([7, 7, 3]);
-
-        let top_cubes = generate_top_cube_torus_orthants();
-
-        let grader = TopCubeGrader::new(HashMapGrader::uniform(top_cubes, 0, 1), Some(0));
-
-        CubicalComplex::new(minimum, maximum, grader)
-    }
 
     #[test]
     fn full_reduce_cube_torus_complex() {
-        let complex = top_cube_torus_hashmap();
-        let mut matching = TopCubicalMatching::default();
-        let morse_complex = matching.full_reduce(CoreductionMatching::new(), complex).1;
-
-        let mut cells_by_dimension = [Vec::new(), Vec::new(), Vec::new()];
-        for cell in morse_complex.iter() {
-            if morse_complex.grade(&cell) == 0 {
-                cells_by_dimension[morse_complex.cell_dimension(&cell) as usize].push(cell);
-                assert_eq!(morse_complex.cell_boundary(&cell), HashMapModule::new());
-            }
+        fn run<G: UniformGrader>() {
+            let complex = complex_from_orthants::<G>(&torus_orthants());
+            let matching = TopCubicalMatching::new(complex);
+            let morse_complex = matching.full_reduce(CoreductionMatching::new).1;
+            assert_betti_numbers(&morse_complex, &[1, 2, 1]);
         }
-        assert_eq!(cells_by_dimension[0].len(), 1, "0-dimensional cells");
-        assert_eq!(cells_by_dimension[1].len(), 2, "1-dimensional cells");
-        assert_eq!(cells_by_dimension[2].len(), 1, "2-dimensional cells");
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
     }
 
     #[test]
-    fn builder_pattern_works() {
-        let matching: TopCubicalMatching<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Orthant>> =
+    fn full_reduce_sn() {
+        fn run<G: UniformGrader>() {
+            for n in 1..=4u32 {
+                let complex = complex_from_orthants::<G>(&sn_orthants(n as usize));
+                let matching = TopCubicalMatching::new(complex);
+                let morse_complex = matching.full_reduce(CoreductionMatching::new).1;
+                let mut expected = vec![0u32; n as usize + 1];
+                expected[0] = 1;
+                expected[n as usize] = 1;
+                assert_betti_numbers(&morse_complex, &expected);
+            }
+        }
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
+    }
+
+    #[test]
+    fn full_reduce_sn_grade_truncated() {
+        fn run<G: UniformGrader>() {
+            for n in 1..=4u32 {
+                let complex = complex_from_orthants::<G>(&sn_orthants(n as usize));
+                let matching = TopCubicalMatching::builder().max_grade(0).build(complex);
+                let morse_complex = matching.full_reduce(CoreductionMatching::new).1;
+                assert_all_grade_zero(&morse_complex);
+                let mut expected = vec![0u32; n as usize + 1];
+                expected[0] = 1;
+                expected[n as usize] = 1;
+                assert_betti_numbers(&morse_complex, &expected);
+            }
+        }
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
+    }
+
+    #[test]
+    fn full_reduce_torus_grade_truncated() {
+        fn run<G: UniformGrader>() {
+            let complex = complex_from_orthants::<G>(&torus_orthants());
+            let matching = TopCubicalMatching::builder().max_grade(0).build(complex);
+            let morse_complex = matching.full_reduce(CoreductionMatching::new).1;
+            assert_all_grade_zero(&morse_complex);
+            assert_betti_numbers(&morse_complex, &[1, 2, 1]);
+        }
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
+    }
+
+    #[test]
+    fn builder_config_is_preserved() {
+        // Build with a tiny complex to verify config values survive into the matching.
+        let min = Orthant::from([0, 0]);
+        let max = Orthant::from([1, 1]);
+        let grader: HashGrader<Orthant> = HashGrader::new(0);
+        let complex: CubicalComplex<F2, _> =
+            CubicalComplex::new(min, max, TopCubeGrader::new(grader, None));
+
+        let matching: TopCubicalMatching<F2, HashGrader<Orthant>> =
             TopCubicalMatchingBuilder::new()
                 .max_grade(10)
                 .max_dimension(5)
-                .build();
+                .build(complex);
 
-        assert_eq!(matching.config().maximum_critical_grade, 10);
-        assert_eq!(matching.config().maximum_critical_dimension, 5);
-    }
-
-    #[test]
-    fn convenience_constructors_work() {
-        let matching: TopCubicalMatching<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Orthant>> =
-            TopCubicalMatching::with_max_grade(10);
-        assert_eq!(matching.config().maximum_critical_grade, 10);
-
-        let matching: TopCubicalMatching<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Orthant>> =
-            TopCubicalMatching::with_max_dimension(5);
-        assert_eq!(matching.config().maximum_critical_dimension, 5);
-
-        let matching: TopCubicalMatching<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Orthant>> =
-            TopCubicalMatching::with_constraints(10, 5);
         assert_eq!(matching.config().maximum_critical_grade, 10);
         assert_eq!(matching.config().maximum_critical_dimension, 5);
     }
@@ -982,94 +710,287 @@ mod tests {
     /// appear in the boundary of other critical cells.
     #[test]
     fn filtered_matching_includes_all_boundary_cells() {
-        // Create a simple complex where filtering could miss critical cells.
-        // Use orthants at subgrid boundaries to trigger the bug.
-        let top_cubes = vec![Orthant::from([1, 1]), Orthant::from([2, 2])];
-        let minimum = Orthant::from([0, 0]);
-        let maximum = Orthant::from([3, 3]);
-        let grader = TopCubeGrader::new(HashMapGrader::uniform(top_cubes.clone(), 0, 1), Some(0));
-        let complex: CubicalComplex<HashMapModule<Cube, Cyclic<2>>, _> =
-            CubicalComplex::new(minimum, maximum, grader);
-
-        // Use filter_orthants with the same orthants used for grading
-        let mut matching: TopCubicalMatching<
-            HashMapModule<Cube, Cyclic<2>>,
-            HashMapGrader<Orthant>,
-        > = TopCubicalMatching::<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Orthant>>::builder()
-            .filter_orthants(top_cubes)
-            .max_grade(0)
-            .build();
-
-        // This should not panic - if it does, gradient found a critical cell
-        // not in the projection map
-        matching.compute_matching(complex);
-
-        // Verify we found critical cells
-        assert!(!matching.critical_cells().is_empty());
+        fn run<G: UniformGrader>() {
+            let top_cubes = vec![Orthant::from([1, 1]), Orthant::from([2, 2])];
+            let complex = complex_from_orthants::<G>(&top_cubes);
+            let matching = TopCubicalMatching::<F2, G>::builder()
+                .filter_orthants(top_cubes)
+                .max_grade(0)
+                .build(complex);
+            assert!(!matching.critical_cells().is_empty());
+        }
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
     }
 
     /// Test with the torus complex using filtered matching to ensure
     /// all critical boundary cells are included.
     #[test]
     fn filtered_torus_matching_works() {
-        let top_cubes = generate_top_cube_torus_orthants();
-        let complex = top_cube_torus_hashmap();
-
-        let mut matching: TopCubicalMatching<
-            HashMapModule<Cube, Cyclic<2>>,
-            HashMapGrader<Orthant>,
-        > = TopCubicalMatching::<HashMapModule<Cube, Cyclic<2>>, HashMapGrader<Orthant>>::builder()
-            .filter_orthants(top_cubes)
-            .max_grade(0)
-            .build();
-
-        // Should not panic
-        matching.compute_matching(complex);
-
-        // Should find the same critical cells as unfiltered matching
-        let critical = matching.critical_cells();
-        assert!(!critical.is_empty());
+        fn run<G: UniformGrader>() {
+            let top_cubes = torus_orthants();
+            let complex = complex_from_orthants::<G>(&top_cubes);
+            let matching = TopCubicalMatching::<F2, G>::builder()
+                .filter_orthants(top_cubes)
+                .max_grade(0)
+                .build(complex);
+            assert!(!matching.critical_cells().is_empty());
+        }
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
     }
 
     #[test]
     fn colift_roundtrips_correctly() {
-        let complex = top_cube_torus_hashmap();
-        let mut matching: TopCubicalMatching<
-            HashMapModule<Cube, Cyclic<2>>,
-            HashMapGrader<Orthant>,
-        > = TopCubicalMatching::default();
-        matching.compute_matching(complex);
+        fn run<G: UniformGrader>() {
+            let complex = complex_from_orthants::<G>(&torus_orthants());
+            let matching = TopCubicalMatching::new(complex);
 
-        for lower_cell in matching
-            .critical_cells()
-            .into_iter()
-            .map(|cube| matching.project_cell(cube).unwrap())
-        {
-            let chain = HashMapModule::singleton(lower_cell, Cyclic::one());
-            let colifted = matching.colift(chain.clone());
-            let colowered = matching.colower(colifted);
-            assert_eq!(chain, colowered,);
+            for lower_cell in matching
+                .critical_cells()
+                .iter()
+                .map(|cube| matching.project_cell(cube).unwrap())
+            {
+                let chain = Chain::from(lower_cell);
+                let colifted = matching.colift(chain.clone());
+                let colowered = matching.colower(colifted);
+                assert_eq!(chain, colowered);
+            }
         }
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
     }
 
     #[test]
     fn lower_lift_roundtrip() {
-        let complex = top_cube_torus_hashmap();
-        let mut matching: TopCubicalMatching<
-            HashMapModule<Cube, Cyclic<2>>,
-            HashMapGrader<Orthant>,
-        > = TopCubicalMatching::default();
-        matching.compute_matching(complex);
+        fn run<G: UniformGrader>() {
+            let complex = complex_from_orthants::<G>(&torus_orthants());
+            let matching = TopCubicalMatching::new(complex);
 
-        for lower_cell in matching
-            .critical_cells()
+            for lower_cell in matching
+                .critical_cells()
+                .iter()
+                .map(|cube| matching.project_cell(cube).unwrap())
+            {
+                let chain = Chain::from(lower_cell);
+                let lifted = matching.lift(chain.clone());
+                let lowered = matching.lower(lifted);
+                assert_eq!(chain, lowered);
+            }
+        }
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
+    }
+
+    #[test]
+    fn capped_methods_with_no_filter_match_uncapped() {
+        fn run<G: UniformGrader>() {
+            let complex = complex_from_orthants::<G>(&torus_orthants());
+            let matching = TopCubicalMatching::new(complex);
+
+            for lower_cell in matching
+                .critical_cells()
+                .iter()
+                .map(|cube| matching.project_cell(cube).unwrap())
+            {
+                let chain: Chain<u32, F2> = Chain::from(lower_cell);
+
+                let colifted = matching.colift(chain.clone());
+                let colifted_capped = matching.colift_capped(chain.clone(), u32::MAX);
+                assert_eq!(colifted, colifted_capped);
+
+                let colowered = matching.colower(colifted.clone());
+                let colowered_capped = matching.colower_capped(colifted, u32::MAX);
+                assert_eq!(colowered, colowered_capped);
+
+                let lifted = matching.lift(chain.clone());
+                let lifted_capped = matching.lift_capped(chain.clone(), 0);
+                assert_eq!(lifted, lifted_capped);
+
+                let lowered = matching.lower(lifted.clone());
+                let lowered_capped = matching.lower_capped(lifted, 0);
+                assert_eq!(lowered, lowered_capped);
+            }
+        }
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
+    }
+
+    #[test]
+    #[allow(clippy::absurd_extreme_comparisons)]
+    fn colift_capped_respects_grade_bound() {
+        fn run<G: UniformGrader>() {
+            let complex = complex_from_orthants::<G>(&torus_orthants());
+            let matching = TopCubicalMatching::new(complex.clone());
+
+            let grade_0_cell = matching
+                .critical_cells()
+                .iter()
+                .find(|cube| complex.grade(*cube) == 0)
+                .expect("should have grade 0 critical cells");
+
+            let lower_cell = matching.project_cell(grade_0_cell).unwrap();
+            let chain: Chain<u32, F2> = Chain::from(lower_cell);
+
+            let colifted_capped = matching.colift_capped(chain, 0);
+            for (cube, _) in colifted_capped {
+                assert!(
+                    complex.grade(&cube) <= 0,
+                    "colift_capped(_, 0) produced grade {} cell",
+                    complex.grade(&cube)
+                );
+            }
+        }
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
+    }
+
+    fn assert_is_cocycle_in_sublevel<C: Complex>(
+        complex: &C,
+        cochain: &Chain<C::Cell, C::Ring>,
+        max_grade: u32,
+        context: &str,
+    ) {
+        let coboundary: Chain<C::Cell, C::Ring> = complex
+            .coboundary(cochain)
             .into_iter()
-            .map(|cube| matching.project_cell(cube).unwrap())
-        {
-            let chain = HashMapModule::singleton(lower_cell, Cyclic::one());
-            let lifted = matching.lift(chain.clone());
-            let lowered = matching.lower(lifted);
-            assert_eq!(chain, lowered,);
+            .filter(|(cell, _)| complex.grade(cell) <= max_grade)
+            .collect();
+        assert!(
+            coboundary.is_empty(),
+            "{}: cochain is not a cocycle in sublevel (grade <= {}), coboundary has {} nonzero \
+             terms",
+            context,
+            max_grade,
+            coboundary.len()
+        );
+    }
+
+    #[test]
+    fn colift_capped_preserves_cocycle_in_sublevel() {
+        fn run<G: UniformGrader>() {
+            let complex = complex_from_orthants::<G>(&torus_orthants());
+            let matching = TopCubicalMatching::new(complex.clone());
+
+            let morse_complex = matching.construct_morse_complex();
+
+            for lower_cell in morse_complex.iter() {
+                if morse_complex.cell_dimension(&lower_cell) != 1 {
+                    continue;
+                }
+                if morse_complex.grade(&lower_cell) != 0 {
+                    continue;
+                }
+
+                let cocycle: Chain<u32, F2> = Chain::from(lower_cell);
+                let colifted_capped = matching.colift_capped(cocycle, 0);
+
+                assert_is_cocycle_in_sublevel(
+                    &complex,
+                    &colifted_capped,
+                    0,
+                    &format!("colift_capped of critical 1-cell {lower_cell}"),
+                );
+            }
+        }
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
+    }
+
+    #[test]
+    fn flow_operations_are_chain_maps() {
+        fn run<G: UniformGrader>() {
+            let complex = complex_from_orthants::<G>(&torus_orthants());
+            let matching = TopCubicalMatching::new(complex.clone());
+
+            let morse_complex = matching.construct_morse_complex();
+
+            // Test lower: parent -> Morse (boundary direction)
+            for cube in complex.iter().take(50) {
+                let chain: Chain<Cube, F2> = Chain::from(cube.clone());
+                let left = matching.lower(complex.boundary(&chain));
+                let right = morse_complex.boundary(&matching.lower(chain));
+                assert_eq!(left, right, "lower is not a chain map for {cube:?}");
+            }
+
+            // Test lift: Morse -> parent (boundary direction)
+            for lower_cell in morse_complex.iter() {
+                let chain: Chain<u32, F2> = Chain::from(lower_cell);
+                let left = complex.boundary(&matching.lift(chain.clone()));
+                let right = matching.lift(morse_complex.boundary(&chain));
+                assert_eq!(
+                    left, right,
+                    "lift is not a chain map for Morse cell {lower_cell}"
+                );
+            }
+
+            // Test colower: parent -> Morse (coboundary direction)
+            for cube in complex.iter().take(50) {
+                let cochain: Chain<Cube, F2> = Chain::from(cube.clone());
+                let left = matching.colower(complex.coboundary(&cochain));
+                let right = morse_complex.coboundary(&matching.colower(cochain));
+                assert_eq!(left, right, "colower is not a cochain map for {cube:?}");
+            }
+
+            // Test colift: Morse -> parent (coboundary direction)
+            for lower_cell in morse_complex.iter() {
+                let cochain: Chain<u32, F2> = Chain::from(lower_cell);
+                let left = complex.coboundary(&matching.colift(cochain.clone()));
+                let right = matching.colift(morse_complex.coboundary(&cochain));
+                assert_eq!(
+                    left, right,
+                    "colift is not a cochain map for Morse cell {lower_cell}"
+                );
+            }
+        }
+        run::<HashGrader<Orthant>>();
+        run::<OrthantTrie>();
+    }
+
+    /// Verify that `match_helper`'s incidence equals the negation of
+    /// `flow::compute_incidence` for leaf matchings across representative
+    /// (extent, `match_axis`) pairs. Uses `Cyclic<3>` where sign matters.
+    ///
+    /// This also serves as a non-F2 sign correctness test: it verifies
+    /// `match_helper`'s incidence against the boundary formula in
+    /// `CubicalComplex::cell_boundary`, since `compute_incidence` was
+    /// independently verified against that formula.
+    #[test]
+    fn sign_convention_consistency() {
+        type R = crate::Cyclic<3>;
+
+        for match_axis in 0u32..5 {
+            for extent in 0u32..32 {
+                let upper = extent | (1 << match_axis);
+                let lower = extent & !(1 << match_axis);
+                if upper == lower {
+                    continue;
+                }
+
+                let leaf = OrthantMatching::construct_leaf(upper, lower, 0);
+
+                let base = Orthant::from([1i16; 5]);
+                let dual: Orthant = (0..5)
+                    .map(|axis| i16::from(extent & (1 << axis) != 0))
+                    .collect();
+                let cube = Cube::new(base, dual);
+
+                let cell_match =
+                    TopCubicalMatching::<R, HashGrader<Orthant>>::match_helper(cube, extent, &leaf);
+                let match_incidence = match &cell_match {
+                    CellMatch::King { incidence, .. } | CellMatch::Queen { incidence, .. } => {
+                        *incidence
+                    },
+                    CellMatch::Ace { .. } => panic!("leaf should not produce Ace"),
+                };
+
+                let flow_incidence: R = super::flow::compute_incidence(extent, match_axis);
+
+                assert_eq!(
+                    match_incidence, -flow_incidence,
+                    "sign mismatch: extent={extent:#07b}, match_axis={match_axis}"
+                );
+            }
         }
     }
 }

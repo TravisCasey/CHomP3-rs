@@ -1,6 +1,5 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 //! Iterators for traversing cubical complexes.
 //!
@@ -19,7 +18,7 @@ use super::{Cube, Orthant};
 /// # Examples
 ///
 /// ```rust
-/// use chomp3rs::{Orthant, OrthantIterator};
+/// use chomp3rs::{Orthant, complexes::OrthantIterator};
 ///
 /// let min = Orthant::from([0, 0]);
 /// let max = Orthant::from([1, 1]);
@@ -90,7 +89,7 @@ impl Iterator for OrthantIterator {
 /// # Examples
 ///
 /// ```rust
-/// use chomp3rs::{CubeIterator, Orthant};
+/// use chomp3rs::{Orthant, complexes::CubeIterator};
 ///
 /// let min = Orthant::from([0, 0]);
 /// let max = Orthant::from([1, 1]);

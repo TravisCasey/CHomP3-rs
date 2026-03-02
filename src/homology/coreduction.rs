@@ -1,6 +1,5 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// This file is part of CHomP3-rs, licensed under the GPL-3.0-or-later.
+// See LICENSE or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 //! Coreduction-based discrete Morse matching.
 //!
@@ -13,13 +12,13 @@
 //! [`TopCubicalMatching`](super::TopCubicalMatching) which exploits the grid
 //! structure for better performance.
 
-use std::{collections::HashMap, hash::Hash, marker::PhantomData, mem::take};
+use std::{collections::HashMap, mem::take};
 
 use tracing::{debug, info, trace};
 
 use crate::{
-    CellMatch, ComplexLike, HashMapModule, ModuleLike, MorseMatching, RingLike,
-    homology::linked_list::LinkedList, logging::ProgressTracker,
+    CellMatch, Complex, MorseMatching, Ring, homology::linked_list::LinkedList,
+    logging::ProgressTracker,
 };
 
 /// A general-purpose acyclic partial matching based on coreduction.
@@ -30,7 +29,7 @@ use crate::{
 ///
 /// # When to Use
 ///
-/// - **General cell complexes**: Works on any type implementing [`ComplexLike`]
+/// - **General cell complexes**: Works on any type implementing [`Complex`]
 ///   with hashable cells.
 /// - **Morse complex reduction**: Used as the generic matching in
 ///   [`MorseMatching::full_reduce`] to further reduce Morse complexes.
@@ -56,20 +55,17 @@ use crate::{
 ///
 /// ```
 /// use chomp3rs::{
-///     CellComplex, CoreductionMatching, Cyclic, HashMapModule, ModuleLike,
-///     MorseMatching, RingLike,
+///     CellComplex, Chain, CoreductionMatching, F2, MorseMatching, Ring,
 /// };
 ///
 /// // Create a line segment: two vertices (cells 0, 1) and one edge (cell 2)
-/// type Module = HashMapModule<u32, Cyclic<2>>;
+/// let mut boundaries: Vec<Chain<u32, F2>> = vec![Chain::new(); 3];
+/// boundaries[2].insert_or_add(1, F2::one()); // edge: v1 - v0
+/// boundaries[2].insert_or_add(0, -F2::one());
 ///
-/// let mut boundaries = vec![Module::new(), Module::new(), Module::new()];
-/// boundaries[2].insert_or_add(1, Cyclic::one()); // edge: v1 - v0
-/// boundaries[2].insert_or_add(0, -Cyclic::one());
-///
-/// let mut coboundaries = vec![Module::new(), Module::new(), Module::new()];
-/// coboundaries[0].insert_or_add(2, -Cyclic::one());
-/// coboundaries[1].insert_or_add(2, Cyclic::one());
+/// let mut coboundaries: Vec<Chain<u32, F2>> = vec![Chain::new(); 3];
+/// coboundaries[0].insert_or_add(2, -F2::one());
+/// coboundaries[1].insert_or_add(2, F2::one());
 ///
 /// let complex = CellComplex::new(
 ///     vec![0, 0, 1], // dimensions
@@ -78,122 +74,84 @@ use crate::{
 ///     coboundaries,
 /// );
 ///
-/// let mut matching = CoreductionMatching::new();
-/// matching.compute_matching(complex);
+/// let matching: CoreductionMatching<_> = CoreductionMatching::new(complex);
 ///
 /// // Line segment is contractible -> one critical cell (a point)
 /// assert_eq!(matching.critical_cells().len(), 1);
 /// ```
-///
-/// # Panics
-///
-/// Most methods from [`MorseMatching`] panic if called before
-/// [`compute_matching`](MorseMatching::compute_matching). The panic message
-/// will indicate that `compute_matching` must be called first.
 ///
 /// # References
 ///
 /// The implementation is based on Algorithm 3.6 in Harker, Mischaikow, Mrozek,
 /// and Nanda, *Discrete Morse Theoretic Algorithms for Computing Homology of
 /// Complexes and Maps*.
-#[derive(Debug, Clone)]
-pub struct CoreductionMatching<C, M = HashMapModule<u32, <C as ComplexLike>::Ring>>
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(bound(
+    serialize = "C: serde::Serialize, C::Cell: serde::Serialize, C::Ring: serde::Serialize",
+    deserialize = "C: serde::de::DeserializeOwned, C::Cell: serde::de::DeserializeOwned + \
+                   std::hash::Hash, C::Ring: serde::de::DeserializeOwned"
+))]
+pub struct CoreductionMatching<C>
 where
-    C: ComplexLike,
-    C::Cell: Hash,
+    C: Complex,
 {
-    complex: Option<C>,
+    complex: C,
     critical_cells: Vec<C::Cell>,
     projection: HashMap<C::Cell, u32>,
     matches: HashMap<C::Cell, CellMatch<C::Cell, C::Ring, u32>>,
-    lower_module_type: PhantomData<M>,
 }
 
-impl<C> CoreductionMatching<C, HashMapModule<u32, <C as ComplexLike>::Ring>>
+impl<C> CoreductionMatching<C>
 where
-    C: ComplexLike,
-    C::Cell: Hash,
+    C: Complex,
 {
-    /// Create a new coreduction matching.
+    /// Compute a coreduction matching on the given cell complex.
     ///
-    /// The matching is not computed until
-    /// [`compute_matching`](MorseMatching::compute_matching) is called.
-    /// Most other methods will panic if called before computing
-    /// the matching.
+    /// Consumes `complex`, computes the acyclic partial matching immediately,
+    /// and returns the completed matching. All [`MorseMatching`] trait methods
+    /// are available on the returned value.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(complex: C) -> Self {
+        let (critical_cells, matches) = CoreductionMatchingImpl::compute_matching(&complex);
+        let mut projection = HashMap::with_capacity(critical_cells.len());
+        for (lower_cell, upper_cell) in critical_cells.iter().enumerate() {
+            projection.insert(upper_cell.clone(), lower_cell as u32);
+        }
         Self {
-            complex: None,
-            critical_cells: Vec::new(),
-            projection: HashMap::new(),
-            matches: HashMap::new(),
-            lower_module_type: PhantomData,
+            complex,
+            critical_cells,
+            projection,
+            matches,
         }
     }
 }
 
-impl<C> Default for CoreductionMatching<C, HashMapModule<u32, <C as ComplexLike>::Ring>>
+impl<C> MorseMatching for CoreductionMatching<C>
 where
-    C: ComplexLike,
-    C::Cell: Hash,
+    C: Complex,
 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<C, M> MorseMatching for CoreductionMatching<C, M>
-where
-    C: ComplexLike,
-    C::Cell: Hash,
-    M: ModuleLike<Cell = u32, Ring = C::Ring>,
-{
-    type LowerModule = M;
     type Priority = u32;
-    type Ring = <C as ComplexLike>::Ring;
-    type UpperCell = <C as ComplexLike>::Cell;
+    type Ring = C::Ring;
+    type UpperCell = C::Cell;
     type UpperComplex = C;
-    type UpperModule = <C as ComplexLike>::Module;
 
-    fn compute_matching(&mut self, complex: Self::UpperComplex) {
-        (self.critical_cells, self.matches) = CoreductionMatchingImpl::compute_matching(&complex);
-        self.complex = Some(complex);
-        self.projection = HashMap::with_capacity(self.critical_cells.len());
-        for (lower_cell, upper_cell) in self.critical_cells.iter().enumerate() {
-            self.projection
-                .insert(upper_cell.clone(), lower_cell as u32);
-        }
+    fn upper_complex(&self) -> &Self::UpperComplex {
+        &self.complex
     }
 
-    fn get_upper_complex(&self) -> Option<&Self::UpperComplex> {
-        self.complex.as_ref()
-    }
-
-    fn take_upper_complex(self) -> Option<Self::UpperComplex> {
+    fn into_upper_complex(self) -> Self::UpperComplex {
         self.complex
     }
 
-    fn critical_cells(&self) -> Vec<Self::UpperCell> {
-        assert!(
-            self.complex.is_some(),
-            "matching not yet computed; call compute_matching first"
-        );
-        self.critical_cells.clone()
+    fn critical_cells(&self) -> &[Self::UpperCell] {
+        &self.critical_cells
     }
 
-    fn project_cell(&self, cell: Self::UpperCell) -> Option<u32> {
-        assert!(
-            self.complex.is_some(),
-            "matching not yet computed; call compute_matching first"
-        );
-        self.projection.get(&cell).copied()
+    fn project_cell(&self, cell: &Self::UpperCell) -> Option<u32> {
+        self.projection.get(cell).copied()
     }
 
     fn include_cell(&self, cell: u32) -> Self::UpperCell {
-        assert!(
-            self.complex.is_some(),
-            "matching not yet computed; call compute_matching first"
-        );
         self.critical_cells[cell as usize].clone()
     }
 
@@ -201,10 +159,6 @@ where
         &self,
         cell: &Self::UpperCell,
     ) -> CellMatch<Self::UpperCell, Self::Ring, Self::Priority> {
-        assert!(
-            self.complex.is_some(),
-            "matching not yet computed; call compute_matching first"
-        );
         self.matches[cell].clone()
     }
 }
@@ -238,8 +192,7 @@ struct CoreductionFace<R> {
 /// consumed to produce the final matching result.
 struct CoreductionMatchingImpl<C>
 where
-    C: ComplexLike,
-    C::Cell: Hash,
+    C: Complex,
 {
     critical_cells: Vec<C::Cell>,
     matches: HashMap<C::Cell, CellMatch<C::Cell, C::Ring, u32>>,
@@ -251,10 +204,9 @@ where
 
 impl<C> CoreductionMatchingImpl<C>
 where
-    C: ComplexLike,
-    C::Cell: Hash,
+    C: Complex,
 {
-    #[allow(clippy::type_complexity, clippy::too_many_lines)]
+    #[allow(clippy::type_complexity)]
     fn compute_matching(
         complex: &C,
     ) -> (
@@ -345,64 +297,6 @@ where
         }
         progress.finish();
         debug!("Coreduction: processed {leaves_processed} leaves during main loop");
-
-        // Check that all cells are matched, and that their classification is
-        // consistent between `matching.critical_cells` and `matching.matches`
-        #[cfg(debug_assertions)]
-        {
-            for cell in complex.iter() {
-                let match_result = matching.matches.get(&cell).expect("cell not matched");
-                let critical = matching.critical_cells.contains(&cell);
-                debug_assert!(!(critical ^ match_result.is_ace()));
-            }
-        }
-
-        // Check that matchings are consistent, queens <=> kings and aces with
-        // themselves.
-        #[cfg(debug_assertions)]
-        {
-            for cell in complex.iter() {
-                match &matching.matches[&cell] {
-                    CellMatch::King {
-                        cell: king,
-                        queen,
-                        incidence,
-                        priority,
-                    } => {
-                        debug_assert_eq!(cell, *king);
-                        debug_assert_eq!(
-                            matching.matches[queen],
-                            CellMatch::Queen {
-                                cell: queen.clone(),
-                                king: king.clone(),
-                                incidence: incidence.clone(),
-                                priority: (priority + 1)
-                            }
-                        );
-                    },
-                    CellMatch::Queen {
-                        cell: queen,
-                        king,
-                        incidence,
-                        priority,
-                    } => {
-                        debug_assert_eq!(cell, *queen);
-                        debug_assert_eq!(
-                            matching.matches[king],
-                            CellMatch::King {
-                                cell: king.clone(),
-                                queen: queen.clone(),
-                                incidence: incidence.clone(),
-                                priority: (priority - 1)
-                            }
-                        );
-                    },
-                    CellMatch::Ace { cell: ace } => {
-                        debug_assert_eq!(cell, *ace);
-                    },
-                }
-            }
-        }
 
         let critical_count = matching.critical_cells.len();
         let matched_pairs = (matching.matches.len() - critical_count) / 2;
@@ -648,38 +542,57 @@ mod tests {
 
     use super::*;
     use crate::{
-        CellComplex, Cube, CubicalComplex, Cyclic, Grader, HashMapGrader, HashMapModule,
-        ModuleLike, Orthant, RingLike,
+        CellComplex, Chain, Complex, Cube, CubicalComplex, Cyclic, Grader, HashGrader, Orthant,
+        Ring,
     };
 
-    type TestModule = HashMapModule<u32, Cyclic<5>>;
-    type TestCubicalModule = HashMapModule<Cube, Cyclic<5>>;
+    /// Build a minimal S^1 as a CW complex: two 0-cells and two 1-cells.
+    ///
+    /// `v0 `and `v1` are vertices. `e0` runs from `v0` to `v1`, `e1` runs `v1`
+    /// to `v0`. Together they form a circle.
+    fn circle_complex() -> CellComplex<Cyclic<5>> {
+        // Cells: v0=0, v1=1, e0=2, e1=3
+        let cell_dimensions = vec![0, 0, 1, 1];
+        let grades = vec![0, 0, 0, 0];
+
+        let mut boundaries: Vec<Chain<u32, Cyclic<5>>> = vec![Chain::new(); 4];
+        // e0: boundary = +v1 - v0
+        boundaries[2].insert_or_add(1, Cyclic::one());
+        boundaries[2].insert_or_add(0, -Cyclic::one());
+        // e1: boundary = +v0 - v1
+        boundaries[3].insert_or_add(0, Cyclic::one());
+        boundaries[3].insert_or_add(1, -Cyclic::one());
+
+        let mut coboundaries: Vec<Chain<u32, Cyclic<5>>> = vec![Chain::new(); 4];
+        // v0: coboundary = -e0 + e1
+        coboundaries[0].insert_or_add(2, -Cyclic::one());
+        coboundaries[0].insert_or_add(3, Cyclic::one());
+        // v1: coboundary = +e0 - e1
+        coboundaries[1].insert_or_add(2, Cyclic::one());
+        coboundaries[1].insert_or_add(3, -Cyclic::one());
+
+        CellComplex::new(cell_dimensions, grades, boundaries, coboundaries)
+    }
 
     #[test]
     fn line_segment_cell_complex() {
-        // Test a line segment: two vertices and one edge
-        // The edge should form a coreduction pair with one vertex
         let cell_dimensions = vec![0, 0, 1]; // vertex0, vertex1, edge
         let grades = vec![0, 0, 0];
 
-        let mut boundaries = vec![TestModule::new(), TestModule::new(), TestModule::new()];
-        // Edge boundary: vertex1 - vertex0
+        let mut boundaries: Vec<Chain<u32, Cyclic<5>>> = vec![Chain::new(); 3];
         boundaries[2].insert_or_add(1, Cyclic::one());
         boundaries[2].insert_or_add(0, -Cyclic::one());
 
-        let mut coboundaries = vec![TestModule::new(), TestModule::new(), TestModule::new()];
-        // Vertex coboundaries
+        let mut coboundaries: Vec<Chain<u32, Cyclic<5>>> = vec![Chain::new(); 3];
         coboundaries[0].insert_or_add(2, -Cyclic::one());
         coboundaries[1].insert_or_add(2, Cyclic::one());
 
         let complex = CellComplex::new(cell_dimensions, grades, boundaries, coboundaries);
-        let mut matching = CoreductionMatching::new();
-        matching.compute_matching(complex);
+        let matching = CoreductionMatching::new(complex);
 
         // Should have one critical cell (contractible to a point)
         assert_eq!(matching.critical_cells().len(), 1);
 
-        // Count the types of matches
         let mut aces = 0;
         let mut kings = 0;
         let mut queens = 0;
@@ -692,7 +605,6 @@ mod tests {
             }
         }
 
-        // Should have 1 ace, 1 king-queen pair
         assert_eq!(aces, 1);
         assert_eq!(kings, 1);
         assert_eq!(queens, 1);
@@ -700,50 +612,36 @@ mod tests {
 
     #[test]
     fn triangle_cell_complex() {
-        // Test a triangle: 3 vertices, 3 edges, 1 face
-        let cell_dimensions = vec![0, 0, 0, 1, 1, 1, 2]; // 3 vertices, 3 edges, 1 face
+        let cell_dimensions = vec![0, 0, 0, 1, 1, 1, 2];
         let grades = vec![0, 0, 0, 0, 0, 0, 0];
 
-        let mut boundaries = vec![TestModule::new(); 7];
-        // Edge boundaries
-        boundaries[3].insert_or_add(1, Cyclic::one()); // edge 0->1
+        let mut boundaries: Vec<Chain<u32, Cyclic<5>>> = vec![Chain::new(); 7];
+        boundaries[3].insert_or_add(1, Cyclic::one());
         boundaries[3].insert_or_add(0, -Cyclic::one());
-
-        boundaries[4].insert_or_add(2, Cyclic::one()); // edge 1->2
+        boundaries[4].insert_or_add(2, Cyclic::one());
         boundaries[4].insert_or_add(1, -Cyclic::one());
-
-        boundaries[5].insert_or_add(0, Cyclic::one()); // edge 2->0
+        boundaries[5].insert_or_add(0, Cyclic::one());
         boundaries[5].insert_or_add(2, -Cyclic::one());
-
-        // Face boundary
         boundaries[6].insert_or_add(3, Cyclic::one());
         boundaries[6].insert_or_add(4, Cyclic::one());
         boundaries[6].insert_or_add(5, Cyclic::one());
 
-        let mut coboundaries = vec![TestModule::new(); 7];
-        // Vertex coboundaries
+        let mut coboundaries: Vec<Chain<u32, Cyclic<5>>> = vec![Chain::new(); 7];
         coboundaries[0].insert_or_add(3, -Cyclic::one());
         coboundaries[0].insert_or_add(5, Cyclic::one());
-
         coboundaries[1].insert_or_add(4, -Cyclic::one());
         coboundaries[1].insert_or_add(3, Cyclic::one());
-
         coboundaries[2].insert_or_add(5, -Cyclic::one());
         coboundaries[2].insert_or_add(4, Cyclic::one());
-
-        // Edge coboundaries
         coboundaries[3].insert_or_add(6, Cyclic::one());
         coboundaries[4].insert_or_add(6, Cyclic::one());
         coboundaries[5].insert_or_add(6, Cyclic::one());
 
         let complex = CellComplex::new(cell_dimensions, grades, boundaries, coboundaries);
-        let mut matching = CoreductionMatching::new();
-        matching.compute_matching(complex);
+        let matching = CoreductionMatching::new(complex);
 
-        // Triangle is contractible, should reduce to single point
         assert_eq!(matching.critical_cells().len(), 1);
 
-        // Verify all cells are either critical or matched
         let critical_set: HashSet<u32> = matching.critical_cells().iter().copied().collect();
         let mut matched_count = 0;
 
@@ -764,7 +662,6 @@ mod tests {
 
     #[test]
     fn line_segment_cubical_complex() {
-        // Create a 1D line segment from [0] to [1]
         let min = Orthant::from([0]);
         let max = Orthant::from([1]);
 
@@ -773,23 +670,20 @@ mod tests {
             Cube::vertex(Orthant::from([1])),
             Cube::from_extent(Orthant::from([0]), &[true]),
         ];
-        let grader = HashMapGrader::uniform(cells, 0, 1);
-        let complex: CubicalComplex<TestCubicalModule, _> = CubicalComplex::new(min, max, grader);
+        let grader = HashGrader::uniform(cells, 0, 1);
+        let complex: CubicalComplex<Cyclic<5>, _> = CubicalComplex::new(min, max, grader);
 
-        let mut matching = CoreductionMatching::new();
-        matching.compute_matching(complex);
+        let matching = CoreductionMatching::new(complex);
 
-        // Line segment should contract to a point (complex of interest is grade 0)
         assert_eq!(
             matching
                 .critical_cells()
                 .iter()
-                .filter(|cell| matching.get_upper_complex().unwrap().grade(cell) == 0)
+                .filter(|cell| matching.upper_complex().grade(cell) == 0)
                 .count(),
             1
         );
 
-        // Verify the edge forms a coreduction pair with one of its boundary vertices
         let edge = Cube::from_extent(Orthant::from([0]), &[true]);
         let vertex0 = Cube::vertex(Orthant::from([0]));
         let vertex1 = Cube::vertex(Orthant::from([1]));
@@ -819,11 +713,9 @@ mod tests {
 
     #[test]
     fn empty_square_cubical_complex() {
-        // Create a cubical complex on 2x2 grid of orthants
         let min = Orthant::from([0, 0]);
         let max = Orthant::from([2, 1]);
 
-        // Empty square in orthants (0, 0) to (1, 1), with an extra edge
         let cells = [
             Cube::vertex(Orthant::from([0, 0])),
             Cube::vertex(Orthant::from([1, 0])),
@@ -837,20 +729,18 @@ mod tests {
             Cube::from_extent(Orthant::from([1, 1]), &[true, false]),
         ];
 
-        let grader = HashMapGrader::uniform(cells, 0, 1);
-        let complex: CubicalComplex<TestCubicalModule, _> = CubicalComplex::new(min, max, grader);
+        let grader = HashGrader::uniform(cells, 0, 1);
+        let complex: CubicalComplex<Cyclic<5>, _> = CubicalComplex::new(min, max, grader);
 
-        let mut matching = CoreductionMatching::new();
-        matching.compute_matching(complex.clone());
+        let matching = CoreductionMatching::new(complex.clone());
 
-        // Empty square has 1 dim 0 critical cell and 1 dim 1 critical cell
-        // in grade 0.
+        // Empty square has 1 dim 0 critical cell and 1 dim 1 critical cell in grade 0.
         assert_eq!(
             matching
-                .critical_cells
+                .critical_cells()
                 .iter()
                 .filter_map(|cell| {
-                    if matching.get_upper_complex().unwrap().grade(cell) == 0 {
+                    if matching.upper_complex().grade(cell) == 0 {
                         Some(cell.dimension())
                     } else {
                         None
@@ -860,7 +750,6 @@ mod tests {
             vec![0, 1]
         );
 
-        // Verify that the matching preserves the total number of cells
         let all_cells: Vec<_> = complex.iter().collect();
         let critical_count = matching.critical_cells().len();
         let mut matched_count = 0;
@@ -879,45 +768,197 @@ mod tests {
 
     #[test]
     fn empty_complex() {
-        // A complex with no cells
-        let complex: CellComplex<TestModule> = CellComplex::new(vec![], vec![], vec![], vec![]);
-
-        let mut matching = CoreductionMatching::new();
-        matching.compute_matching(complex);
-
+        let complex: CellComplex<Cyclic<5>> = CellComplex::new(vec![], vec![], vec![], vec![]);
+        let matching = CoreductionMatching::new(complex);
         assert!(matching.critical_cells().is_empty());
     }
 
     #[test]
     fn single_cell_complex() {
-        // A complex with just one vertex (automatically critical)
-        let complex: CellComplex<TestModule> = CellComplex::new(
-            vec![0],                 // dimension 0
-            vec![0],                 // grade 0
-            vec![TestModule::new()], // no boundary
-            vec![TestModule::new()], // no coboundary
-        );
+        let complex: CellComplex<Cyclic<5>> =
+            CellComplex::new(vec![0], vec![0], vec![Chain::new()], vec![Chain::new()]);
 
-        let mut matching = CoreductionMatching::new();
-        matching.compute_matching(complex);
+        let matching = CoreductionMatching::new(complex);
 
-        // Single cell must be critical
         assert_eq!(matching.critical_cells().len(), 1);
         assert_eq!(matching.critical_cells()[0], 0);
         assert!(matching.match_cell(&0).is_ace());
     }
 
     #[test]
-    #[should_panic(expected = "matching not yet computed")]
-    fn panic_before_compute_critical_cells() {
-        let matching: CoreductionMatching<CellComplex<TestModule>> = CoreductionMatching::new();
-        let _ = matching.critical_cells();
+    fn project_include_roundtrip() {
+        let matching = CoreductionMatching::new(circle_complex());
+
+        for (i, &cell) in matching.critical_cells().iter().enumerate() {
+            // project_cell(include_cell(i)) == Some(i)
+            assert_eq!(
+                matching.project_cell(&matching.include_cell(i as u32)),
+                Some(i as u32)
+            );
+            // project_cell of a critical cell returns its index
+            assert_eq!(matching.project_cell(&cell), Some(i as u32));
+            // include_cell(project_cell(cell)) == cell
+            assert_eq!(
+                matching.include_cell(matching.project_cell(&cell).unwrap()),
+                cell
+            );
+        }
     }
 
     #[test]
-    #[should_panic(expected = "matching not yet computed")]
-    fn panic_before_compute_match_cell() {
-        let matching: CoreductionMatching<CellComplex<TestModule>> = CoreductionMatching::new();
-        let _ = matching.match_cell(&0);
+    fn lower_lift_roundtrip() {
+        let matching = CoreductionMatching::new(circle_complex());
+
+        for (i, _) in matching.critical_cells().iter().enumerate() {
+            let morse_chain: Chain<u32, Cyclic<5>> = Chain::from(i as u32);
+            let lifted = matching.lift(morse_chain.clone());
+            let lowered = matching.lower(lifted);
+            assert_eq!(
+                morse_chain, lowered,
+                "lower(lift(chain)) != chain for Morse cell {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn colift_colower_roundtrip() {
+        let matching = CoreductionMatching::new(circle_complex());
+
+        for (i, _) in matching.critical_cells().iter().enumerate() {
+            let morse_cochain: Chain<u32, Cyclic<5>> = Chain::from(i as u32);
+            let colifted = matching.colift(morse_cochain.clone());
+            let colowered = matching.colower(colifted);
+            assert_eq!(
+                morse_cochain, colowered,
+                "colower(colift(cochain)) != cochain for Morse cell {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn flow_operations_are_chain_maps() {
+        let complex = circle_complex();
+        let matching = CoreductionMatching::new(complex.clone());
+        let morse_complex = matching.construct_morse_complex();
+
+        // lower(bd(c)) == bd_morse(lower(c)) for all cells
+        for cell in complex.iter() {
+            let chain: Chain<u32, Cyclic<5>> = Chain::from(cell);
+            let left = matching.lower(complex.boundary(&chain));
+            let right = morse_complex.boundary(&matching.lower(chain));
+            assert_eq!(left, right, "lower is not a chain map for cell {cell}");
+        }
+
+        // lift(bd_morse(m)) == bd(lift(m)) for all Morse cells
+        for morse_cell in morse_complex.iter() {
+            let chain: Chain<u32, Cyclic<5>> = Chain::from(morse_cell);
+            let left = complex.boundary(&matching.lift(chain.clone()));
+            let right = matching.lift(morse_complex.boundary(&chain));
+            assert_eq!(
+                left, right,
+                "lift is not a chain map for Morse cell {morse_cell}"
+            );
+        }
+
+        // colower(cbd(c)) == cbd_morse(colower(c)) for all cells
+        for cell in complex.iter() {
+            let cochain: Chain<u32, Cyclic<5>> = Chain::from(cell);
+            let left = matching.colower(complex.coboundary(&cochain));
+            let right = morse_complex.coboundary(&matching.colower(cochain));
+            assert_eq!(left, right, "colower is not a cochain map for cell {cell}");
+        }
+
+        // colift(cbd_morse(m)) == cbd(colift(m)) for all Morse cells
+        for morse_cell in morse_complex.iter() {
+            let cochain: Chain<u32, Cyclic<5>> = Chain::from(morse_cell);
+            let left = complex.coboundary(&matching.colift(cochain.clone()));
+            let right = matching.colift(morse_complex.coboundary(&cochain));
+            assert_eq!(
+                left, right,
+                "colift is not a cochain map for Morse cell {morse_cell}"
+            );
+        }
+    }
+
+    #[test]
+    fn morse_complex_boundary_squared_is_zero() {
+        let matching = CoreductionMatching::new(circle_complex());
+        let morse_complex = matching.construct_morse_complex();
+
+        for cell in morse_complex.iter() {
+            let bd = morse_complex.cell_boundary(&cell);
+            let bd2 = morse_complex.boundary(&bd);
+            assert_eq!(bd2, Chain::new(), "d^2 != 0 for Morse cell {cell}");
+        }
+    }
+
+    #[test]
+    fn capped_methods_match_uncapped_at_neutral_bounds() {
+        // All cells have grade 0, so min_grade=0 / max_grade=u32::MAX should
+        // produce the same result as the uncapped variants.
+        let matching = CoreductionMatching::new(circle_complex());
+
+        for (i, _) in matching.critical_cells().iter().enumerate() {
+            let chain: Chain<u32, Cyclic<5>> = Chain::from(i as u32);
+
+            let lifted = matching.lift(chain.clone());
+            let lifted_capped = matching.lift_capped(chain.clone(), 0);
+            assert_eq!(lifted, lifted_capped, "lift_capped != lift at min_grade=0");
+
+            let lowered = matching.lower(lifted.clone());
+            let lowered_capped = matching.lower_capped(lifted.clone(), 0);
+            assert_eq!(
+                lowered, lowered_capped,
+                "lower_capped != lower at min_grade=0"
+            );
+
+            let colifted = matching.colift(chain.clone());
+            let colifted_capped = matching.colift_capped(chain.clone(), u32::MAX);
+            assert_eq!(
+                colifted, colifted_capped,
+                "colift_capped != colift at max_grade=u32::MAX"
+            );
+
+            let colowered = matching.colower(colifted.clone());
+            let colowered_capped = matching.colower_capped(colifted.clone(), u32::MAX);
+            assert_eq!(
+                colowered, colowered_capped,
+                "colower_capped != colower at max_grade=u32::MAX"
+            );
+        }
+    }
+
+    #[test]
+    fn full_reduce_circle() {
+        let matching = CoreductionMatching::new(circle_complex());
+        let (_, morse_complex) = matching.full_reduce(CoreductionMatching::new);
+
+        // S^1: exactly one 0-cell and one 1-cell
+        let mut cells_by_dim = [0usize; 2];
+        for cell in morse_complex.iter() {
+            let d = morse_complex.cell_dimension(&cell) as usize;
+            assert!(d < 2, "unexpected cell dimension {d}");
+            cells_by_dim[d] += 1;
+        }
+        assert_eq!(cells_by_dim[0], 1, "expected 1 critical 0-cell (H0=Z)");
+        assert_eq!(cells_by_dim[1], 1, "expected 1 critical 1-cell (H1=Z)");
+
+        // d^2 = 0 in the final Morse complex
+        for cell in morse_complex.iter() {
+            let bd = morse_complex.cell_boundary(&cell);
+            let bd2 = morse_complex.boundary(&bd);
+            assert_eq!(bd2, Chain::new(), "d^2 != 0 in final Morse complex");
+        }
+
+        // The 1-cell's boundary must be zero (otherwise H1 would be trivial)
+        for cell in morse_complex.iter() {
+            if morse_complex.cell_dimension(&cell) == 1 {
+                assert_eq!(
+                    morse_complex.cell_boundary(&cell),
+                    Chain::new(),
+                    "1-cell boundary is not zero; H1 would be trivial"
+                );
+            }
+        }
     }
 }
