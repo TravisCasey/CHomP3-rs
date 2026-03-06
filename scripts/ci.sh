@@ -63,7 +63,7 @@ cmd_miri() {
 
 cmd_deny() {
     run_step "Cargo deny" \
-        cargo deny check
+        cargo deny --all-features check
 }
 
 cmd_spellcheck() {

@@ -36,6 +36,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - run: sudo apt-get update && sudo apt-get install -y libopenmpi-dev
       - uses: Swatinem/rust-cache@v2
       - run: ./scripts/ci.sh clippy
 
@@ -58,6 +59,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
+      - name: Install MPI (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libopenmpi-dev
+      - name: Install MPI (macOS)
+        if: runner.os == 'macOS'
+        run: brew install open-mpi
       - uses: Swatinem/rust-cache@v2
       - run: ./scripts/ci.sh test
 
@@ -110,7 +117,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-spellcheck
+          tool: cargo-spellcheck@0.15.5
       - run: ./scripts/ci.sh spellcheck
 
   success:

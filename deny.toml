@@ -2,6 +2,11 @@
 yanked = "warn"
 unmaintained = "workspace"
 unsound = "workspace"
+ignore = [
+    # Bincode is unmaintained but v2.0.1 is stable and functional for our
+    # MPI serialization needs. Used only behind the `mpi` feature flag.
+    "RUSTSEC-2025-0141",
+]
 
 [licenses]
 allow = [
@@ -9,12 +14,30 @@ allow = [
     "LGPL-3.0-or-later",
     "MIT",
     "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
     "Unicode-3.0",
 ]
 
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+# Duplicates from transitive dependencies (MPI, windows, dev-deps) that we
+# cannot control.
+skip = [
+    { crate = "itertools" },
+    { crate = "windows-link" },
+    { crate = "windows-sys" },
+    { crate = "windows-targets" },
+    { crate = "windows_aarch64_gnullvm" },
+    { crate = "windows_aarch64_msvc" },
+    { crate = "windows_i686_gnu" },
+    { crate = "windows_i686_gnullvm" },
+    { crate = "windows_i686_msvc" },
+    { crate = "windows_x86_64_gnu" },
+    { crate = "windows_x86_64_gnullvm" },
+    { crate = "windows_x86_64_msvc" },
+]
 
 [sources]
 unknown-registry = "warn"
