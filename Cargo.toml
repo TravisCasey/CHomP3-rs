@@ -7,7 +7,7 @@ description = "Computational Homology Project 3"
 readme = "README.md"
 repository = "https://github.com/TravisCasey/CHomP3-rs"
 license = "GPL-3.0-or-later"
-keywords = ["homology", "topology", "dynamical systems"]
+keywords = ["homology", "topology"]
 categories = ["mathematics"]
 resolver = "3"
 
@@ -36,9 +36,6 @@ itertools = "0.14.0"
 mpi = { version = "0.8.0", features = ["derive"], optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 tracing = { version = "0.1.41", features = ["log"] }
-
-[workspace]
-members = []
 
 [dev-dependencies]
 divan = "0.1.21"
