@@ -34,6 +34,7 @@ use crate::{Orthant, logging::ProgressTracker};
 /// Nonempty subgrids are computed at construction time and stored for efficient
 /// iteration.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GridSubdivision {
     minimum_orthant: Orthant,
     maximum_orthant: Orthant,

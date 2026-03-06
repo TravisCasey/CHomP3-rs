@@ -75,7 +75,7 @@ mod linked_list;
 mod morse;
 
 // Macro to generate `full_reduce` with cfg-gated serde bounds on `PM`.
-// When `mpi` is enabled, `PM` must be serializable so that specialized
+// When `serde` is enabled, `PM` must be serializable so that specialized
 // overrides can broadcast results across processes.
 macro_rules! define_full_reduce {
     ($($bound:path),* $(,)?) => {
@@ -207,12 +207,12 @@ where
     }
 
     // The `full_reduce` default method requires serde bounds on `PM` when
-    // the `mpi` feature is enabled, because specialized overrides (e.g.,
-    // `TopCubicalMatching`) broadcast `PM` across MPI processes. A macro
+    // the `serde` feature is enabled, because specialized overrides (e.g.,
+    // `TopCubicalMatching`) may broadcast `PM` across MPI processes. A macro
     // avoids duplicating the documentation between the two cfg variants.
-    #[cfg(not(feature = "mpi"))]
+    #[cfg(not(feature = "serde"))]
     define_full_reduce!();
-    #[cfg(feature = "mpi")]
+    #[cfg(feature = "serde")]
     define_full_reduce!(serde::Serialize, serde::de::DeserializeOwned);
 
     /// Return a reference to the parent cell complex.

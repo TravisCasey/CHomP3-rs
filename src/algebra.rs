@@ -46,7 +46,7 @@ use std::{
 pub use chain::{Chain, ChainIter, ChainIterMut};
 pub use cyclic::{Cyclic, F2};
 pub use ordered::{OrderedChain, OrderedChainIter, OrderedChainIterMut};
-#[cfg(feature = "mpi")]
+#[cfg(feature = "serde")]
 use serde::{Serialize, de::DeserializeOwned};
 
 mod chain;
@@ -76,9 +76,9 @@ impl<T> Additive for T where
 impl<T> Multiplicative for T where T: Mul<Output = Self> + MulAssign {}
 
 // The Ring trait uses a macro to conditionally include serde supertraits when
-// the `mpi` feature is enabled. This avoids duplicating serde bounds on every
-// MPI-related function signature throughout the crate. When `mpi` is disabled,
-// custom ring types need not implement serde.
+// the `serde` feature is enabled. This avoids duplicating serde bounds on every
+// function signature throughout the crate. When `serde` is disabled, custom
+// ring types need not implement serde.
 
 macro_rules! define_ring_trait {
     ($($bound:path),* $(,)?) => {
@@ -94,10 +94,8 @@ macro_rules! define_ring_trait {
         ///
         /// ### Serialization
         ///
-        /// When the `mpi` feature flag is enabled, serde
-        /// [`Serialize`](serde::Serialize) and
-        /// [`DeserializeOwned`](serde::de::DeserializeOwned) bounds are
-        /// required for inter-process communication.
+        /// When the `serde` feature flag is enabled, serde `Serialize` and
+        /// `DeserializeOwned` bounds are required.
         pub trait Ring: Sized + Clone + Eq + Debug + Additive + Multiplicative $(+ $bound)* {
             /// Creates a ring element representing the additive identity.
             #[must_use]
@@ -118,10 +116,10 @@ macro_rules! define_ring_trait {
     };
 }
 
-#[cfg(not(feature = "mpi"))]
+#[cfg(not(feature = "serde"))]
 define_ring_trait!();
 
-#[cfg(feature = "mpi")]
+#[cfg(feature = "serde")]
 define_ring_trait!(Serialize, DeserializeOwned);
 
 /// Formats a chain as a sum of terms for [`Display`] output.

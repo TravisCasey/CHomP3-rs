@@ -18,7 +18,7 @@ use crate::Orthant;
 ///   grade.
 /// - `Critical`: The suborthant contains a single critical cell.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "mpi", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OrthantMatching {
     /// A branch node that subdivides the orthant into multiple suborthants.
     Branch {

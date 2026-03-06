@@ -10,6 +10,7 @@ use std::{
 };
 
 use flint_sys::nmod_vec::{nmod_add, nmod_init, nmod_inv, nmod_mul, nmod_neg, nmod_sub, nmod_t};
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize, de::Visitor};
 
 use super::Ring;
@@ -213,6 +214,7 @@ impl<const MOD: u64> Hash for Cyclic<MOD> {
     }
 }
 
+#[cfg(feature = "serde")]
 impl<const MOD: u64> Serialize for Cyclic<MOD> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -222,6 +224,7 @@ impl<const MOD: u64> Serialize for Cyclic<MOD> {
     }
 }
 
+#[cfg(feature = "serde")]
 impl<'de, const MOD: u64> Deserialize<'de> for Cyclic<MOD> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -250,6 +253,7 @@ impl<'de, const MOD: u64> Deserialize<'de> for Cyclic<MOD> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "serde")]
     use serde_test::{Token, assert_tokens};
 
     use super::*;
@@ -372,6 +376,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "serde")]
     fn serialization() {
         let a = Cyclic::<11>::from(6);
         assert_tokens(&a, &[Token::U64(6)]);

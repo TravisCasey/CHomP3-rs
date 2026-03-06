@@ -31,6 +31,14 @@ use super::Grader;
 /// assert_eq!(grader.grade(&3), 0); // default grade
 /// ```
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound(
+        serialize = "B: serde::Serialize + Eq + std::hash::Hash",
+        deserialize = "B: serde::Deserialize<'de> + Eq + std::hash::Hash"
+    ))
+)]
 pub struct HashGrader<B> {
     grades: HashMap<B, u32>,
     default_grade: u32,

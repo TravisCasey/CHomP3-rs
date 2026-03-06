@@ -193,11 +193,16 @@ enum TrieNode<'a> {
 }
 
 /// Read a `u32` value from a `&[u16]` slice where `u32` values are stored as
-/// pairs of native-endian `u16` values (written via `align_to`).
+/// pairs of `u16` values (low half first, high half second).
 fn read_u32(slice: &[u16], index: usize) -> u32 {
-    let lo = slice[2 * index].to_ne_bytes();
-    let hi = slice[2 * index + 1].to_ne_bytes();
-    u32::from_ne_bytes([lo[0], lo[1], hi[0], hi[1]])
+    u32::from(slice[2 * index]) | (u32::from(slice[2 * index + 1]) << 16)
+}
+
+/// Write a `u32` value into a `Vec<u16>` as two `u16` values (low half first,
+/// high half second).
+fn write_u32(trie: &mut Vec<u16>, value: u32) {
+    trie.push(value as u16);
+    trie.push((value >> 16) as u16);
 }
 
 impl<'a> TrieNode<'a> {
@@ -324,6 +329,8 @@ impl<'a> TrieNode<'a> {
 /// compression optimization. The default grade, however, can be modified via
 /// the [`OrthantTrie::set_default_grade`] method.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[allow(clippy::unsafe_derive_deserialize)]
 pub struct OrthantTrie {
     trie: Vec<u16>,
     default_grade: u32,
@@ -471,20 +478,14 @@ impl OrthantTrie {
             self.trie.push(comp_len as u16);
             self.trie.push(num_children as u16);
 
-            // SAFETY: Reinterpreting types via align_to is safe because:
-            // - align_to().1 returns the properly aligned middle slice
-            // - For &[i16] -> &[u16]: both types have same size/alignment, we only read bit
-            //   patterns
-            // - For &[u32] -> &[u16]: u32 can be safely viewed as two u16 values (no
-            //   endianness issues since we'll read them back the same way)
-            unsafe {
-                for (orthant, _grade) in orthant_grades {
-                    self.trie
-                        .extend_from_slice(orthant.as_slice()[depth..].align_to().1);
-                }
-                for (_orthant, grade) in orthant_grades {
-                    self.trie.extend_from_slice([*grade].align_to().1);
-                }
+            for (orthant, _grade) in orthant_grades {
+                // SAFETY: i16 and u16 have the same size and alignment; this
+                // reinterprets bit patterns without any byte-order dependency.
+                self.trie
+                    .extend_from_slice(unsafe { orthant.as_slice()[depth..].align_to().1 });
+            }
+            for (_orthant, grade) in orthant_grades {
+                write_u32(&mut self.trie, *grade);
             }
 
             return;
@@ -543,16 +544,8 @@ impl OrthantTrie {
 
         // Leaf node: child indices are grades instead of indices
         if depth + 1 == dimension {
-            // SAFETY: Reinterpreting u32 as &[u16] via align_to is safe because:
-            // - align_to().1 returns the properly aligned middle slice
-            // - u32 can be safely viewed as two u16 values (same total size, compatible
-            //   alignment)
-            // - We maintain consistency by reading them back as u32 later via transmute in
-            //   wrap()
-            unsafe {
-                for (_orthant, grade) in orthant_grades {
-                    self.trie.extend_from_slice([*grade].align_to().1);
-                }
+            for (_orthant, grade) in orthant_grades {
+                write_u32(&mut self.trie, *grade);
             }
             return;
         }
@@ -572,16 +565,9 @@ impl OrthantTrie {
             // Record where this child's node begins in the trie
             let next_node_index = self.trie.len();
 
-            // SAFETY: Reinterpreting u32 as &[u16] and copying into the trie is safe
-            // because:
-            // - align_to().1 gives us exactly 2 u16 values representing the u32
-            // - The target slice has length 2 (verified by the range)
-            // - We'll read these back as u32 via transmute in wrap(), maintaining
-            //   consistency
-            unsafe {
-                self.trie[child_begin_index + 2 * index..child_begin_index + 2 * index + 2]
-                    .copy_from_slice([next_node_index as u32].align_to().1);
-            };
+            let value = next_node_index as u32;
+            self.trie[child_begin_index + 2 * index] = value as u16;
+            self.trie[child_begin_index + 2 * index + 1] = (value >> 16) as u16;
             // Split off orthants with this coordinate value and recurse
             (next_coord_slice, remainder) = remainder.split_at(count);
             self.dfs_construct(
@@ -707,12 +693,10 @@ mod tests {
         // length 2
         // child (grade) count 4
         let mut correct_trie = vec![1, 2, 4, 0, 0, 0, 1, 1, 0, 1, 1];
-        unsafe {
-            correct_trie.extend_from_slice([1u32].align_to().1);
-            correct_trie.extend_from_slice([2u32].align_to().1);
-            correct_trie.extend_from_slice([3u32].align_to().1);
-            correct_trie.extend_from_slice([4u32].align_to().1);
-        }
+        write_u32(&mut correct_trie, 1);
+        write_u32(&mut correct_trie, 2);
+        write_u32(&mut correct_trie, 3);
+        write_u32(&mut correct_trie, 4);
         assert_eq!(grader.trie, correct_trie);
 
         assert_eq!(grader.grade(&Orthant::from([0, 0])), 1);
@@ -744,21 +728,17 @@ mod tests {
         // bitmap len 2
         // child count 3
         let mut correct_trie = vec![0, 0, 2, 3, 0, 2, 3, 2];
-        unsafe {
-            correct_trie.extend_from_slice([14u32].align_to().1);
-            correct_trie.extend_from_slice([24u32].align_to().1);
-            correct_trie.extend_from_slice([34u32].align_to().1);
-        }
+        write_u32(&mut correct_trie, 14);
+        write_u32(&mut correct_trie, 24);
+        write_u32(&mut correct_trie, 34);
         // Second branch, first coord 0, possible values -1..=2
         // discriminant 0 -> branch
         // minimal -1
         // bitmap len 1
         // child count 2
         correct_trie.extend_from_slice(&[0, -1i16 as u16, 1, 2, 0, 9]);
-        unsafe {
-            correct_trie.extend_from_slice([2u32].align_to().1);
-            correct_trie.extend_from_slice([1u32].align_to().1);
-        }
+        write_u32(&mut correct_trie, 2);
+        write_u32(&mut correct_trie, 1);
 
         // Third branch, first coord 1, possible values 0..=1
         // discriminant 0 -> branch
@@ -766,10 +746,8 @@ mod tests {
         // bitmap len 1
         // child count 2
         correct_trie.extend_from_slice(&[0, 0, 1, 2, 0, 3]);
-        unsafe {
-            correct_trie.extend_from_slice([3u32].align_to().1);
-            correct_trie.extend_from_slice([4u32].align_to().1);
-        }
+        write_u32(&mut correct_trie, 3);
+        write_u32(&mut correct_trie, 4);
 
         // Fourth branch, first coord 17, possible value 4
         // discriminant 0 -> branch
@@ -777,9 +755,7 @@ mod tests {
         // bitmap len 1
         // child count 1
         correct_trie.extend_from_slice(&[0, 4, 1, 1, 0, 1]);
-        unsafe {
-            correct_trie.extend_from_slice([20u32].align_to().1);
-        }
+        write_u32(&mut correct_trie, 20);
 
         assert_eq!(grader.trie, correct_trie);
 

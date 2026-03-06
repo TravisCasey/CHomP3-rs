@@ -85,12 +85,16 @@ use crate::{
 /// The implementation is based on Algorithm 3.6 in Harker, Mischaikow, Mrozek,
 /// and Nanda, *Discrete Morse Theoretic Algorithms for Computing Homology of
 /// Complexes and Maps*.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(bound(
-    serialize = "C: serde::Serialize, C::Cell: serde::Serialize, C::Ring: serde::Serialize",
-    deserialize = "C: serde::de::DeserializeOwned, C::Cell: serde::de::DeserializeOwned + \
-                   std::hash::Hash, C::Ring: serde::de::DeserializeOwned"
-))]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound(
+        serialize = "C: serde::Serialize, C::Cell: serde::Serialize, C::Ring: serde::Serialize",
+        deserialize = "C: serde::de::DeserializeOwned, C::Cell: serde::de::DeserializeOwned + \
+                       std::hash::Hash, C::Ring: serde::de::DeserializeOwned"
+    ))
+)]
 pub struct CoreductionMatching<C>
 where
     C: Complex,

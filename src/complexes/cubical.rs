@@ -97,7 +97,7 @@ const MAX_DIMENSION: usize = 32;
 /// The interface is otherwise similar to an array with size fixed after
 /// construction.
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "mpi", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Orthant {
     dimension: usize,
     coordinates: [i16; MAX_DIMENSION],
@@ -354,7 +354,7 @@ impl Hash for Orthant {
 /// assert_eq!(square.extent(), vec![true, true]); // extent 11
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "mpi", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Cube {
     base_orthant: Orthant,
     dual_orthant: Orthant,

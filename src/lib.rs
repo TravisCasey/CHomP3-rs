@@ -17,8 +17,10 @@
 //!
 //! # Feature Flags
 //!
+//! - **`serde`**: Enables serde `Serialize` and `Deserialize` implementations
+//!   on core types. Requires serde bounds on custom ring types.
 //! - **`mpi`**: Enables MPI-based distributed computation for large cubical
-//!   complexes. Requires serde bounds on generic type parameters.
+//!   complexes. Implies `serde`.
 
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]

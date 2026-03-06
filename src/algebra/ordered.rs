@@ -81,11 +81,15 @@ use super::{Chain, Ring};
 /// ([`inner_mut`](Self::inner_mut)) do not canonicalize, so zero
 /// entries may be present. [`PartialEq`] filters zeros, so chains
 /// with incidental zeros still compare correctly.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-#[serde(bound(
-    serialize = "B: serde::Serialize + Ord, R: serde::Serialize",
-    deserialize = "B: serde::Deserialize<'de> + Ord, R: serde::Deserialize<'de>"
-))]
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound(
+        serialize = "B: serde::Serialize + Ord, R: serde::Serialize",
+        deserialize = "B: serde::Deserialize<'de> + Ord, R: serde::Deserialize<'de>"
+    ))
+)]
 pub struct OrderedChain<B, R> {
     map: BTreeMap<B, R>,
 }

@@ -61,7 +61,8 @@ use std::cmp::Ordering;
 ///     }
 /// }
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CellMatch<T, R, P> {
     /// A king cell matched to a queen of one lower dimension.
     King {

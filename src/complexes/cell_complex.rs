@@ -61,9 +61,9 @@ use crate::{Chain, Complex, Grader, Ring};
 ///
 /// [`CubicalComplex`]: crate::CubicalComplex
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "mpi", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
-    feature = "mpi",
+    feature = "serde",
     serde(bound(
         serialize = "R: serde::Serialize",
         deserialize = "R: serde::de::DeserializeOwned"
