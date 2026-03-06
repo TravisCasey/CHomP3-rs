@@ -1,6 +1,6 @@
 [package]
 name = "chomp3rs"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["Travis Casey"]
 edition = "2024"
 description = "Computational Homology Project 3"

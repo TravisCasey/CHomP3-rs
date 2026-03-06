@@ -17,7 +17,7 @@ const TORUS_BETTI: [usize; 3] = [1, 2, 1];
 
 const CASES: &[Scenario] = &[
     Scenario {
-        label: "low_dim_unfiltered_full",
+        label: "dim4_unfiltered_full",
         dim: 4,
         config: MatchingConfig {
             filtered: false,
@@ -26,7 +26,7 @@ const CASES: &[Scenario] = &[
         },
     },
     Scenario {
-        label: "low_dim_filtered_full",
+        label: "dim4_filtered_full",
         dim: 4,
         config: MatchingConfig {
             filtered: true,
@@ -35,8 +35,8 @@ const CASES: &[Scenario] = &[
         },
     },
     Scenario {
-        label: "high_dim_filtered_subgrid2_full",
-        dim: 7,
+        label: "dim5_filtered_subgrid2_full",
+        dim: 5,
         config: MatchingConfig {
             filtered: true,
             subgrid_size: 2,
@@ -44,8 +44,8 @@ const CASES: &[Scenario] = &[
         },
     },
     Scenario {
-        label: "high_dim_filtered_subgrid2_grade0",
-        dim: 7,
+        label: "dim5_filtered_subgrid2_grade0",
+        dim: 5,
         config: MatchingConfig {
             filtered: true,
             subgrid_size: 2,
