@@ -1,6 +1,6 @@
 [package]
 name = "chomp3rs"
-version = "0.3.3"
+version = "0.3.4"
 authors = ["Travis Casey"]
 edition = "2024"
 description = "Computational Homology Project 3"
@@ -33,17 +33,17 @@ debug = true
 [dependencies]
 bincode = { version = "2.0.1", features = ["serde", "alloc"], optional = true }
 flint-sys = "0.7.3"
-itertools = "0.14.0"
+itertools = "0.12.0"
 mpi = { version = "0.8.0", features = ["derive"], optional = true }
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 tracing = { version = "0.1.41", features = ["log"] }
 
 [dev-dependencies]
 divan = "0.1.21"
-nalgebra = "0.33"
-rand = "0.8"
-rand_chacha = "0.3"
-rand_distr = "0.4"
+nalgebra = "0.34"
+rand = "0.10"
+rand_chacha = "0.10"
+rand_distr = "0.6"
 serde_test = "1.0.177"
 
 [workspace.lints.clippy]

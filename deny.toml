@@ -22,22 +22,6 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
-# Duplicates from transitive dependencies (MPI, windows, dev-deps) that we
-# cannot control.
-skip = [
-    { crate = "itertools" },
-    { crate = "windows-link" },
-    { crate = "windows-sys" },
-    { crate = "windows-targets" },
-    { crate = "windows_aarch64_gnullvm" },
-    { crate = "windows_aarch64_msvc" },
-    { crate = "windows_i686_gnu" },
-    { crate = "windows_i686_gnullvm" },
-    { crate = "windows_i686_msvc" },
-    { crate = "windows_x86_64_gnu" },
-    { crate = "windows_x86_64_gnullvm" },
-    { crate = "windows_x86_64_msvc" },
-]
 
 [sources]
 unknown-registry = "warn"
