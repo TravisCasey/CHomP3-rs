@@ -9,6 +9,7 @@
 #   ./scripts/ci.sh <command>    # run a specific check group
 #
 # Commands: fmt, clippy, test, doc, miri, deny, spellcheck
+# Flags:    --quick, --no-mpi
 
 set -euo pipefail
 
@@ -38,15 +39,19 @@ cmd_fmt() {
 cmd_clippy() {
     run_step "Clippy (default features)" \
         cargo clippy --workspace --all-targets
-    run_step "Clippy (MPI)" \
-        cargo clippy --workspace --all-targets --features mpi
+    if [ "$no_mpi" = false ]; then
+        run_step "Clippy (MPI)" \
+            cargo clippy --workspace --all-targets --features mpi
+    fi
 }
 
 cmd_test() {
     run_step "Tests (default features)" \
         cargo test --workspace
-    run_step "Tests (MPI)" \
-        cargo test --workspace --features mpi
+    if [ "$no_mpi" = false ]; then
+        run_step "Tests (MPI)" \
+            cargo test --workspace --features mpi
+    fi
 }
 
 cmd_doc() {
@@ -73,10 +78,12 @@ cmd_spellcheck() {
 
 # Parse arguments
 quick=false
+no_mpi=false
 command=""
 for arg in "$@"; do
     case "$arg" in
         --quick) quick=true ;;
+        --no-mpi) no_mpi=true ;;
         fmt|clippy|test|doc|miri|deny|spellcheck) command="$arg" ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
