@@ -18,13 +18,13 @@
 //!     .run(0..100, |x| vec![x * x]);
 //! ```
 
-use bincode::serde::{decode_from_slice, encode_to_vec};
 use mpi::traits::{Destination, Root, Source};
 pub use mpi::{
     environment::{Universe, initialize, processor_name},
     topology::SimpleCommunicator,
     traits::Communicator,
 };
+use postcard::{from_bytes, to_allocvec};
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{Level, debug, trace, warn};
 
@@ -239,9 +239,7 @@ impl MpiExecutor {
                 trace!("Results from rank {source_rank}");
 
                 let worker_results: Vec<C> =
-                    decode_from_slice(&msg_bytes, bincode::config::standard())
-                        .expect("failed to decode results")
-                        .0;
+                    from_bytes(&msg_bytes).expect("failed to decode results");
                 let items_completed = worker_results.len();
                 for batch_result in worker_results {
                     results.extend(batch_result);
@@ -291,8 +289,7 @@ impl MpiExecutor {
             *active_workers -= 1;
             trace!("Shutdown rank {worker_rank}, {active_workers} remaining");
         } else {
-            let encoded =
-                encode_to_vec(&batch, bincode::config::standard()).expect("failed to encode batch");
+            let encoded = to_allocvec(&batch).expect("failed to encode batch");
             self.comm
                 .process_at_rank(worker_rank)
                 .send_with_tag(&encoded, MpiTag::WorkAssignment as i32);
@@ -326,16 +323,13 @@ impl MpiExecutor {
                 "worker rank {rank} received unexpected tag {tag}"
             );
 
-            let batch: Vec<T> = decode_from_slice(&msg_bytes, bincode::config::standard())
-                .expect("failed to decode batch")
-                .0;
+            let batch: Vec<T> = from_bytes(&msg_bytes).expect("failed to decode batch");
 
             // Each input item produces exactly one C, preserving the 1:1 count.
             // The root relies on this for item-level progress tracking.
             let results: Vec<C> = batch.into_iter().map(|item| compute(state, item)).collect();
 
-            let encoded = encode_to_vec(&results, bincode::config::standard())
-                .expect("failed to encode results");
+            let encoded = to_allocvec(&results).expect("failed to encode results");
             self.comm
                 .process_at_rank(0)
                 .send_with_tag(&encoded, MpiTag::ResultSubmission as i32);
@@ -380,7 +374,7 @@ where
     T: Serialize + DeserializeOwned,
 {
     let encoded = if comm.rank() == 0 {
-        encode_to_vec(data, bincode::config::standard()).expect("failed to encode for broadcast")
+        to_allocvec(data).expect("failed to encode for broadcast")
     } else {
         Vec::new()
     };
@@ -398,7 +392,5 @@ where
     };
     comm.process_at_rank(0).broadcast_into(&mut buffer);
 
-    decode_from_slice(&buffer, bincode::config::standard())
-        .expect("failed to decode broadcast data")
-        .0
+    from_bytes(&buffer).expect("failed to decode broadcast data")
 }

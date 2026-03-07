@@ -12,8 +12,8 @@
 //! All operations broadcast their result to all processes before returning,
 //! ensuring consistent state across the MPI communicator.
 
-use bincode::serde::{decode_from_slice, encode_to_vec};
 use mpi::traits::{Communicator, Destination, Source};
+use postcard::{from_bytes, to_allocvec};
 use tracing::info;
 
 use super::{
@@ -194,8 +194,7 @@ impl<'a, R: Ring> DistributedWavefront<'a, R> {
     fn dispatch_orthant(&mut self, orthant: &Orthant) {
         self.frontier.mark_dispatched(orthant);
 
-        let encoded =
-            encode_to_vec(orthant, bincode::config::standard()).expect("failed to encode orthant");
+        let encoded = to_allocvec(orthant).expect("failed to encode orthant");
 
         self.comm
             .process_at_rank(self.next_worker)
@@ -233,9 +232,7 @@ impl<'a, R: Ring> DistributedWavefront<'a, R> {
                 .receive_vec_with_tag(MpiTag::ResultSubmission as i32);
 
             let (orthant, matching): (Orthant, OrthantMatching) =
-                decode_from_slice(&msg, bincode::config::standard())
-                    .expect("failed to decode matching result")
-                    .0;
+                from_bytes(&msg).expect("failed to decode matching result");
 
             self.frontier.attach_matching(&orthant, matching);
 
@@ -249,9 +246,7 @@ impl<'a, R: Ring> DistributedWavefront<'a, R> {
         let (msg, _) = self.comm.process_at_rank(source_rank).receive_vec();
 
         let (orthant, matching): (Orthant, OrthantMatching) =
-            decode_from_slice(&msg, bincode::config::standard())
-                .expect("failed to decode matching result")
-                .0;
+            from_bytes(&msg).expect("failed to decode matching result");
 
         self.frontier.attach_matching(&orthant, matching);
     }
@@ -276,16 +271,13 @@ where
 
         assert_eq!(tag, MpiTag::WorkAssignment as i32, "unexpected tag {tag}");
 
-        let orthant: Orthant = decode_from_slice(&msg, bincode::config::standard())
-            .expect("failed to decode orthant")
-            .0;
+        let orthant: Orthant = from_bytes(&msg).expect("failed to decode orthant");
 
         let orthant_matching = subgrid.match_subgrid(orthant.clone(), orthant.clone())[0]
             .2
             .clone();
 
-        let result = encode_to_vec(&(orthant, orthant_matching), bincode::config::standard())
-            .expect("failed to encode result");
+        let result = to_allocvec(&(orthant, orthant_matching)).expect("failed to encode result");
 
         comm.process_at_rank(0)
             .send_with_tag(&result, MpiTag::ResultSubmission as i32);

@@ -1,6 +1,6 @@
 [package]
 name = "chomp3rs"
-version = "0.3.6"
+version = "0.3.7"
 authors = ["Travis Casey"]
 edition = "2024"
 description = "Computational Homology Project 3"
@@ -13,7 +13,7 @@ resolver = "3"
 
 [features]
 serde = ["dep:serde"]
-mpi = ["dep:mpi", "dep:bincode", "serde"]
+mpi = ["dep:mpi", "dep:postcard", "serde"]
 
 [[bench]]
 name = "top_cube_sn"
@@ -31,7 +31,7 @@ harness = false
 debug = true
 
 [dependencies]
-bincode = { version = "2.0.1", features = ["serde", "alloc"], optional = true }
+postcard = { version = "1.1.3", features = ["alloc"], optional = true }
 flint-sys = "0.7.3"
 itertools = "0.12.0"
 mpi = { version = "0.8.0", features = ["derive"], optional = true }
