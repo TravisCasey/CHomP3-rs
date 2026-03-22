@@ -39,24 +39,38 @@ cmd_fmt() {
 cmd_clippy() {
     run_step "Clippy (default features)" \
         cargo clippy --workspace --all-targets
+    run_step "Clippy (rayon)" \
+        cargo clippy --workspace --all-targets --features rayon
     if [ "$no_mpi" = false ]; then
-        run_step "Clippy (MPI)" \
+        run_step "Clippy (mpi)" \
             cargo clippy --workspace --all-targets --features mpi
+        run_step "Clippy (mpi+rayon)" \
+            cargo clippy --workspace --all-targets --features mpi,rayon
     fi
 }
 
 cmd_test() {
     run_step "Tests (default features)" \
         cargo test --workspace
+    run_step "Tests (rayon)" \
+        cargo test --workspace --features rayon
     if [ "$no_mpi" = false ]; then
-        run_step "Tests (MPI)" \
+        run_step "Tests (mpi)" \
             cargo test --workspace --features mpi
+        run_step "Tests (mpi+rayon)" \
+            cargo test --workspace --features mpi,rayon
     fi
 }
 
 cmd_doc() {
-    RUSTDOCFLAGS="-Dwarnings" run_step "Documentation" \
+    RUSTDOCFLAGS="-Dwarnings" run_step "Documentation (default features)" \
         cargo doc --no-deps --document-private-items
+    RUSTDOCFLAGS="-Dwarnings" run_step "Documentation (rayon)" \
+        cargo doc --no-deps --document-private-items --features rayon
+    if [ "$no_mpi" = false ]; then
+        RUSTDOCFLAGS="-Dwarnings" run_step "Documentation (all features)" \
+            cargo doc --no-deps --document-private-items --all-features
+    fi
 }
 
 cmd_miri() {

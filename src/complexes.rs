@@ -201,7 +201,7 @@ pub trait Complex: Grader<Self::Cell> {
 /// let grader = EuclideanGrader;
 /// assert_eq!(grader.grade(&(3.0, 4.0)), 500); // Distance 5.0, grade 500
 /// ```
-pub trait Grader<C> {
+pub trait Grader<C>: Send + Sync + 'static {
     /// Returns the grade (filtration level) of the specified cell.
     fn grade(&self, cell: &C) -> u32;
 }

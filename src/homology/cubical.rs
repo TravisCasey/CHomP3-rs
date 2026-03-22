@@ -66,24 +66,24 @@
 
 use std::{collections::HashMap, fmt::Debug, iter::zip};
 
+#[cfg(feature = "mpi")]
+use mpi::traits::Communicator;
 pub use subgrid::{GridSubdivision, OrthantMatching, Subgrid};
 #[cfg(feature = "mpi")]
 use tracing::{info, warn};
 
 #[cfg(feature = "mpi")]
-use crate::mpi::{Communicator, MpiExecutor, broadcast};
-#[cfg(feature = "mpi")]
 use crate::{CellComplex, homology::full_reduce_sequential};
 use crate::{
     CellMatch, Chain, Complex, Cube, CubicalComplex, Grader, MorseMatching, Orthant, Ring,
-    TopCubeGrader, dispatch, logging::ProgressTracker,
+    TopCubeGrader, parallel::map::ParallelMap,
 };
 
 mod builder;
 mod config;
 
 pub use builder::TopCubicalMatchingBuilder;
-pub use config::{ExecutionMode, TopCubicalMatchingConfig};
+pub use config::TopCubicalMatchingConfig;
 
 pub mod flow;
 pub mod subgrid;
@@ -208,21 +208,6 @@ where
         Self::from_config(TopCubicalMatchingConfig::default(), complex)
     }
 
-    /// Compute the matching using MPI-based distributed computation.
-    ///
-    /// This constructor requires the `mpi` feature flag. It will attempt to
-    /// initialize the MPI universe and use the world communicator to control
-    /// processes. If MPI initialization fails, the matching will fall back to
-    /// sequential computation with a warning.
-    ///
-    /// This configuration can also be specified using the provided [builder
-    /// pattern](Self::builder).
-    #[cfg(feature = "mpi")]
-    #[must_use]
-    pub fn new_mpi(complex: CubicalComplex<R, TopCubeGrader<G>>) -> Self {
-        Self::builder().mpi().build(complex)
-    }
-
     fn from_config(
         config: TopCubicalMatchingConfig,
         complex: CubicalComplex<R, TopCubeGrader<G>>,
@@ -239,34 +224,17 @@ where
     }
 
     fn compute(&mut self) {
-        dispatch!(
-            mpi => {
-                if let Some(count) = self.config.execution.process_count() {
-                    if count > 1 {
-                        info!("MPI execution with {count} processes");
-                        self.compute_critical_cells_distributed();
-                        self.compute_boundaries();
-                    } else {
-                        warn!("MPI enabled with single process, using sequential");
-                        self.compute_critical_cells_sequential();
-                        self.compute_boundaries();
-                    }
-                } else {
-                    if matches!(self.config.execution, ExecutionMode::Mpi { comm: None }) {
-                        warn!(
-                            "MPI execution mode enabled but no communicator provided; \
-                             falling back to sequential. Use .mpi_with_comm(comm) to provide one."
-                        );
-                    }
-                    self.compute_critical_cells_sequential();
-                    self.compute_boundaries();
-                }
-            },
-            _ => {
-                self.compute_critical_cells_sequential();
-                self.compute_boundaries();
+        #[cfg(feature = "mpi")]
+        if let Some(count) = self.config.backend.process_count() {
+            if count > 1 {
+                info!("MPI execution with {count} processes");
+            } else {
+                warn!("MPI enabled with single process, using sequential");
             }
-        );
+        }
+
+        self.compute_critical_cells();
+        self.compute_boundaries();
     }
 
     /// Recursive method used to iterate through the nested `orthant_matching`
@@ -361,8 +329,8 @@ where
         }
     }
 
-    /// Compute critical cells sequentially with progress tracking.
-    fn compute_critical_cells_sequential(&mut self) {
+    /// Compute critical cells using the configured execution backend.
+    fn compute_critical_cells(&mut self) {
         let complex = &self.complex;
         let subdivision = GridSubdivision::new(
             complex.minimum().clone(),
@@ -373,27 +341,27 @@ where
 
         let max_grade = self.config.maximum_critical_grade;
         let max_dim = self.config.maximum_critical_dimension;
-        let total = subdivision.len();
 
-        let mut progress = ProgressTracker::new("Critical cells", total);
+        let map = ParallelMap::new(&self.config.backend)
+            .label("Critical cells")
+            .log_level(tracing::Level::INFO)
+            .batch_size(self.config.batch_size);
 
-        let critical_cells: Vec<Cube> = subdivision
-            .into_iter()
-            .flat_map(|(minimum_orthant, maximum_orthant)| {
-                let mut subgrid = Subgrid::new(complex, max_grade, max_dim);
-                let base_critical_orthant = subgrid.match_subgrid(minimum_orthant, maximum_orthant);
+        #[cfg(feature = "mpi")]
+        let map = map.broadcast_results();
 
-                let cells: Vec<Cube> = base_critical_orthant
+        let critical_cells: Vec<Cube> = map.run_with_state(
+            subdivision.into_iter(),
+            || Subgrid::new(complex, max_grade, max_dim),
+            |subgrid, (minimum_orthant, maximum_orthant)| {
+                subgrid
+                    .match_subgrid(minimum_orthant, maximum_orthant)
                     .into_iter()
                     .flat_map(|(_, critical, _)| critical)
-                    .collect();
+                    .collect::<Vec<Cube>>()
+            },
+        );
 
-                progress.increment();
-                cells
-            })
-            .collect();
-
-        progress.finish();
         self.store_critical_cells(critical_cells);
     }
 
@@ -419,63 +387,10 @@ where
     }
 }
 
-#[cfg(feature = "mpi")]
-impl<R, G> TopCubicalMatching<R, G>
-where
-    R: Ring,
-    G: Grader<Orthant> + Clone,
-{
-    /// Compute critical cells using MPI distributed executor.
-    ///
-    /// After computation, all processes have the sorted critical cells and
-    /// projection map populated.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the execution mode is not MPI with a communicator.
-    fn compute_critical_cells_distributed(&mut self) {
-        let comm = self
-            .config
-            .execution
-            .communicator()
-            .expect("compute_critical_cells_distributed requires MPI communicator");
-
-        let complex = &self.complex;
-        let subdivision = GridSubdivision::new(
-            complex.minimum().clone(),
-            complex.maximum().clone(),
-            self.config.subgrid_shape.clone(),
-            self.config.filter_orthants.as_deref(),
-        );
-
-        let max_grade = self.config.maximum_critical_grade;
-        let max_dim = self.config.maximum_critical_dimension;
-
-        let critical_cells: Vec<Cube> = MpiExecutor::new(comm)
-            .label("Critical cells")
-            .log_level(tracing::Level::INFO)
-            .batch_size(self.config.mpi_batch_size)
-            .broadcast_results()
-            .run_with_state(
-                subdivision.into_iter(),
-                || Subgrid::new(complex, max_grade, max_dim),
-                |subgrid, (minimum_orthant, maximum_orthant)| {
-                    subgrid
-                        .match_subgrid(minimum_orthant, maximum_orthant)
-                        .into_iter()
-                        .flat_map(|(_, critical, _)| critical)
-                        .collect::<Vec<Cube>>()
-                },
-            );
-
-        self.store_critical_cells(critical_cells);
-    }
-}
-
 impl<R, G> MorseMatching for TopCubicalMatching<R, G>
 where
     R: Ring,
-    G: Grader<Orthant> + Clone,
+    G: Grader<Orthant> + Clone + Send + Sync,
 {
     type Priority = Orthant;
     type Ring = R;
@@ -537,30 +452,21 @@ where
     {
         let morse_complex = self.construct_morse_complex();
 
-        match &self.config.execution {
-            ExecutionMode::Mpi { comm: Some(c) } if c.size() > 1 => {
-                // Root performs the coreduction loop
-                let (further_matchings, final_complex) = if c.rank() == 0 {
-                    full_reduce_sequential(factory, morse_complex)
-                } else {
-                    (Vec::new(), CellComplex::new(vec![], vec![], vec![], vec![]))
-                };
-
-                // Broadcast results to all processes
-                let further_matchings = broadcast(c, &further_matchings);
-                let final_complex = broadcast(c, &final_complex);
-
-                (further_matchings, final_complex)
-            },
-            ExecutionMode::Mpi { comm: Some(_) } => {
-                warn!("MPI enabled with single process, using sequential full_reduce");
+        if let Some(comm) = self.config.backend.communicator()
+            && comm.size() > 1
+        {
+            let (further_matchings, final_complex) = if comm.rank() == 0 {
                 full_reduce_sequential(factory, morse_complex)
-            },
-            ExecutionMode::Mpi { comm: None } => {
-                warn!("MPI execution mode without communicator, using sequential full_reduce");
-                full_reduce_sequential(factory, morse_complex)
-            },
-            ExecutionMode::Sequential => full_reduce_sequential(factory, morse_complex),
+            } else {
+                (Vec::new(), CellComplex::new(vec![], vec![], vec![], vec![]))
+            };
+
+            let further_matchings = crate::parallel::mpi_utils::broadcast(comm, &further_matchings);
+            let final_complex = crate::parallel::mpi_utils::broadcast(comm, &final_complex);
+
+            (further_matchings, final_complex)
+        } else {
+            full_reduce_sequential(factory, morse_complex)
         }
     }
 

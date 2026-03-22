@@ -5,12 +5,10 @@
 
 use std::marker::PhantomData;
 
-#[cfg(feature = "mpi")]
-use super::ExecutionMode;
 use super::{TopCubicalMatching, TopCubicalMatchingConfig};
 #[cfg(feature = "mpi")]
 use crate::mpi::Communicator;
-use crate::{CubicalComplex, Grader, Orthant, Ring, TopCubeGrader};
+use crate::{CubicalComplex, ExecutionBackend, Grader, Orthant, Ring, TopCubeGrader};
 
 /// Builder pattern helper to build a [`TopCubicalMatching`] object with
 /// various options.
@@ -85,15 +83,18 @@ where
         self
     }
 
-    /// Use MPI to distribute the computation across multiple processes.
-    ///
-    /// The matching will attempt to initialize the MPI universe and use the
-    /// world communicator. For a custom communicator, use
-    /// [`mpi_with_comm`](Self::mpi_with_comm) instead.
-    #[cfg(feature = "mpi")]
+    /// Use sequential execution (default).
     #[must_use]
-    pub fn mpi(mut self) -> Self {
-        self.config.execution = ExecutionMode::Mpi { comm: None };
+    pub fn sequential(mut self) -> Self {
+        self.config.backend = ExecutionBackend::Sequential;
+        self
+    }
+
+    /// Use Rayon shared-memory parallelism.
+    #[cfg(feature = "rayon")]
+    #[must_use]
+    pub fn rayon(mut self) -> Self {
+        self.config.backend = ExecutionBackend::Rayon;
         self
     }
 
@@ -103,17 +104,39 @@ where
     #[cfg(feature = "mpi")]
     #[must_use]
     pub fn mpi_with_comm(mut self, comm: &dyn Communicator) -> Self {
-        self.config.execution = ExecutionMode::Mpi {
-            comm: Some(comm.duplicate()),
-        };
+        self.config.backend = ExecutionBackend::MPI(comm.duplicate());
         self
     }
 
-    /// Set the batch size for MPI work distribution.
-    #[cfg(feature = "mpi")]
+    /// Use hybrid MPI and Rayon with a specific communicator.
+    ///
+    /// MPI distributes work across nodes; Rayon parallelizes within each
+    /// node. The communicator is duplicated.
+    #[cfg(all(feature = "mpi", feature = "rayon"))]
     #[must_use]
-    pub fn mpi_batch_size(mut self, size: usize) -> Self {
-        self.config.mpi_batch_size = size;
+    pub fn hybrid_with_comm(mut self, comm: &dyn Communicator) -> Self {
+        self.config.backend = ExecutionBackend::Hybrid(comm.duplicate());
+        self
+    }
+
+    /// Set the execution backend directly.
+    #[must_use]
+    pub fn backend(mut self, backend: ExecutionBackend) -> Self {
+        self.config.backend = backend;
+        self
+    }
+
+    /// Set batch size for MPI work distribution.
+    #[must_use]
+    pub fn batch_size(mut self, size: usize) -> Self {
+        self.config.batch_size = size;
+        self
+    }
+
+    /// Set sub-batch size for level-parallel flow.
+    #[must_use]
+    pub fn sub_batch_size(mut self, size: usize) -> Self {
+        self.config.sub_batch_size = size;
         self
     }
 

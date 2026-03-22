@@ -756,13 +756,13 @@ impl<R: Ring, G: Grader<Cube>> Complex for CubicalComplex<R, G> {
     }
 }
 
-impl<R, G: Grader<Cube>> Grader<Cube> for CubicalComplex<R, G> {
+impl<R: Ring, G: Grader<Cube>> Grader<Cube> for CubicalComplex<R, G> {
     fn grade(&self, cell: &Cube) -> u32 {
         self.grading_function.grade(cell)
     }
 }
 
-impl<R, G: Grader<Orthant>> Grader<Orthant> for CubicalComplex<R, TopCubeGrader<G>> {
+impl<R: Ring, G: Grader<Orthant>> Grader<Orthant> for CubicalComplex<R, TopCubeGrader<G>> {
     fn grade(&self, cell: &Orthant) -> u32 {
         self.grading_function.grade(cell)
     }

@@ -19,8 +19,11 @@
 //!
 //! - **`serde`**: Enables serde `Serialize` and `Deserialize` implementations
 //!   on core types. Requires serde bounds on custom ring types.
+//! - **`rayon`**: Enables shared-memory parallelism via Rayon for matching and
+//!   flow operations.
 //! - **`mpi`**: Enables MPI-based distributed computation for large cubical
-//!   complexes. Implies `serde`.
+//!   complexes. Implies `serde`. Can be combined with `rayon` for hybrid
+//!   parallelism (MPI between nodes, Rayon within each node).
 
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
@@ -33,6 +36,7 @@ pub use complexes::{
 pub use homology::{
     CellMatch, CoreductionMatching, MorseMatching, TopCubicalMatching, TopCubicalMatchingBuilder,
 };
+pub use parallel::ExecutionBackend;
 
 pub mod algebra;
 pub mod complexes;
@@ -40,42 +44,7 @@ pub mod homology;
 pub(crate) mod logging;
 #[cfg(feature = "mpi")]
 pub mod mpi;
+pub mod parallel;
 pub mod prelude;
 #[cfg(test)]
 mod test_complexes;
-
-/// Dispatch between MPI and non-MPI code paths.
-///
-/// Executes the first branch when the `mpi` feature is enabled,
-/// otherwise executes the fallback branch. This is useful for code that
-/// needs different behavior depending on whether MPI support is available.
-///
-/// # Example
-///
-/// ```ignore
-/// use chomp3rs::dispatch;
-///
-/// dispatch!(
-///     mpi => {
-///         // MPI-enabled code path
-///         run_distributed();
-///     },
-///     _ => {
-///         // Fallback code path
-///         run_sequential();
-///     }
-/// );
-/// ```
-#[macro_export]
-macro_rules! dispatch {
-    (mpi => $mpi:expr,_ => $fallback:expr) => {{
-        #[cfg(feature = "mpi")]
-        {
-            $mpi
-        }
-        #[cfg(not(feature = "mpi"))]
-        {
-            $fallback
-        }
-    }};
-}

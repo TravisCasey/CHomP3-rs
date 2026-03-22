@@ -27,4 +27,5 @@ pub use crate::{
         CellMatch, CoreductionMatching, MorseMatching, TopCubicalMatching,
         TopCubicalMatchingBuilder,
     },
+    parallel::ExecutionBackend,
 };

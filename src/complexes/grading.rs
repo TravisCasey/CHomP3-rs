@@ -169,7 +169,7 @@ where
 
 impl<B> Grader<B> for HashGrader<B>
 where
-    B: Hash + Eq + Clone,
+    B: Hash + Eq + Clone + Send + Sync + 'static,
 {
     fn grade(&self, cell: &B) -> u32 {
         self.grades.get(cell).copied().unwrap_or(self.default_grade)

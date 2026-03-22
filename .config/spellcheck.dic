@@ -1,4 +1,4 @@
-100
+85
 orthant
 orthants
 orthant's
@@ -56,6 +56,9 @@ Spendlove
 reallocations
 serializable
 backend
+backends
+parallelizes
+coface's
 recomputation
 rustfmt
 supertrait

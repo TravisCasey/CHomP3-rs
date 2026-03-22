@@ -3,156 +3,38 @@
 
 //! Gradient flow operations for discrete Morse matching.
 //!
-//! This module provides implementations for `lower`, `colower`, `lift`, and
-//! `colift` operations that flow chains through a discrete Morse matching.
+//! This module provides `lower`, `colower`, `lift`, and `colift` operations
+//! that flow chains through a
+//! [`TopCubicalMatching`](crate::TopCubicalMatching).
 //!
-//! Two execution modes are provided:
-//! - **Sequential**: Single-threaded wavefront iteration
-//! - **Distributed** (requires `mpi` feature): MPI-based parallel matching
-//!   computation with speculative precomputation
+//! # Architecture
 //!
-//! # Distributed Execution
+//! The implementation is split into two layers:
 //!
-//! When MPI is enabled with multiple processes, flow operations are computed
-//! by the root process (rank 0) with worker processes computing orthant
-//! matchings on demand. The result is broadcast to all processes before
-//! returning, so all processes receive identical results.
+//! - **Per-orthant flow** (this file): Given a single orthant's matching and a
+//!   chain of cells within that orthant, processes each queen/king pair,
+//!   emitting results and propagating boundary/coboundary contributions to
+//!   neighboring orthants.
+//!
+//! - **Level-parallel orchestration** (`wavefront`): Maintains a frontier of
+//!   orthants grouped by coordinate-sum level. Within each level, orthants are
+//!   independent (the anti-chain property) and processed in parallel via
+//!   [`ParallelMap`](crate::parallel::map::ParallelMap).
 
-mod sequential;
+mod wavefront;
 
-#[cfg(feature = "mpi")]
-mod distributed;
-#[cfg(feature = "mpi")]
-mod frontier;
+use wavefront::{FlowCell, WavefrontConfig};
+pub(crate) use wavefront::{colift, colower, lift, lower};
 
-#[cfg(feature = "mpi")]
-use mpi::traits::Communicator;
-use sequential::{FlowCell, WavefrontConfig};
+use crate::{Chain, Orthant, Ring, homology::cubical::OrthantMatching};
 
-#[cfg(feature = "mpi")]
-use crate::homology::cubical::ExecutionMode;
-use crate::{
-    Chain, Cube, Grader, Orthant, Ring, TopCubicalMatching, dispatch,
-    homology::cubical::OrthantMatching,
-};
-
-/// Compute `lower`, dispatching to distributed if MPI is active.
+/// Flow a chain through a single orthant's matching tree.
 ///
-/// Results may be inaccurate if the input chain contains cells outside the
-/// grade range implied by the cap.
-pub(crate) fn lower<R, G>(
-    matching: &TopCubicalMatching<R, G>,
-    chain: impl IntoIterator<Item = (Cube, R)>,
-    min_grade: u32,
-) -> Chain<u32, R>
-where
-    R: Ring,
-    G: Grader<Orthant> + Clone,
-{
-    dispatch!(
-        mpi => {
-            if let ExecutionMode::Mpi { comm: Some(c) } = &matching.config().execution
-                && c.size() > 1
-            {
-                return distributed::lower(matching, chain, min_grade, c);
-            }
-            sequential::lower(matching, chain, min_grade)
-        },
-        _ => {
-            sequential::lower(matching, chain, min_grade)
-        }
-    )
-}
-
-/// Compute `colower`, dispatching to distributed if MPI is active.
-///
-/// Results may be inaccurate if the input chain contains cells outside the
-/// grade range implied by the cap.
-pub(crate) fn colower<R, G>(
-    matching: &TopCubicalMatching<R, G>,
-    chain: impl IntoIterator<Item = (Cube, R)>,
-    max_grade: u32,
-) -> Chain<u32, R>
-where
-    R: Ring,
-    G: Grader<Orthant> + Clone,
-{
-    dispatch!(
-        mpi => {
-            if let ExecutionMode::Mpi { comm: Some(c) } = &matching.config().execution
-                && c.size() > 1
-            {
-                return distributed::colower(matching, chain, max_grade, c);
-            }
-            sequential::colower(matching, chain, max_grade)
-        },
-        _ => {
-            sequential::colower(matching, chain, max_grade)
-        }
-    )
-}
-
-/// Compute `lift`, dispatching to distributed if MPI is active.
-///
-/// Results may be inaccurate if the input chain contains cells outside the
-/// grade range implied by the cap.
-pub(crate) fn lift<R, G>(
-    matching: &TopCubicalMatching<R, G>,
-    chain: impl IntoIterator<Item = (u32, R)>,
-    min_grade: u32,
-) -> Chain<Cube, R>
-where
-    R: Ring,
-    G: Grader<Orthant> + Clone,
-{
-    dispatch!(
-        mpi => {
-            if let ExecutionMode::Mpi { comm: Some(c) } = &matching.config().execution
-                && c.size() > 1
-            {
-                return distributed::lift(matching, chain, min_grade, c);
-            }
-            sequential::lift(matching, chain, min_grade)
-        },
-        _ => {
-            sequential::lift(matching, chain, min_grade)
-        }
-    )
-}
-
-/// Compute `colift`, dispatching to distributed if MPI is active.
-///
-/// Results may be inaccurate if the input chain contains cells outside the
-/// grade range implied by the cap.
-pub(crate) fn colift<R, G>(
-    matching: &TopCubicalMatching<R, G>,
-    chain: impl IntoIterator<Item = (u32, R)>,
-    max_grade: u32,
-) -> Chain<Cube, R>
-where
-    R: Ring,
-    G: Grader<Orthant> + Clone,
-{
-    dispatch!(
-        mpi => {
-            if let ExecutionMode::Mpi { comm: Some(c) } = &matching.config().execution
-                && c.size() > 1
-            {
-                return distributed::colift(matching, chain, max_grade, c);
-            }
-            sequential::colift(matching, chain, max_grade)
-        },
-        _ => {
-            sequential::colift(matching, chain, max_grade)
-        }
-    )
-}
-
-/// Shared flow implementation used by both `Wavefront` and
-/// `DistributedWavefront`.
-///
-/// Flows a chain through an orthant's matching, calling `push` for cells that
-/// propagate to other orthants and `callback` for cells that should be yielded.
+/// Walks the [`OrthantMatching`] tree and, for each matched pair encountered:
+/// - Calls `push` with `(neighbor_orthant, extent, coef)` for cells whose
+///   boundary/coboundary extends into an adjacent orthant.
+/// - Calls `callback` with a [`FlowCell`] for cells the caller should collect
+///   (aces, queens, or kings depending on the operation).
 #[allow(clippy::too_many_arguments)]
 fn flow_orthant_impl<R, P, F>(
     orthant: &Orthant,
@@ -183,6 +65,13 @@ fn flow_orthant_impl<R, P, F>(
     );
 }
 
+/// Recursively descend the [`OrthantMatching`] tree.
+///
+/// - **Critical**: Extract the ace coefficient from the chain and emit it.
+/// - **Leaf**: Delegate to [`flow_leaf`] for queen/king pair processing.
+/// - **Branch**: Descend into sub-matchings. Boundary mode processes
+///   suborthants in reverse (high-to-low) so that queens are processed before
+///   the kings they generate; coboundary mode processes in forward order.
 #[allow(clippy::too_many_arguments)]
 fn flow_recursive<R, P, F>(
     orthant: &Orthant,
@@ -260,6 +149,19 @@ fn flow_recursive<R, P, F>(
     }
 }
 
+/// Process a leaf matching node: handle a single queen/king pair.
+///
+/// For each cell in the chain that belongs to this leaf's suborthant
+/// (extent between `lower_extent` and `upper_extent`):
+///
+/// - **Boundary mode** (queen cell, grade at or above cap): Compute the matched
+///   king, push its boundary faces to neighbors, add same-orthant boundary
+///   contributions back to the chain, and emit the queen via callback.
+///
+/// - **Coboundary mode** (king cell, grade at or below cap): Compute the
+///   matched queen, push its coboundary cofaces to neighbors, add same-orthant
+///   coboundary contributions back to the chain, and emit the king via
+///   callback.
 #[allow(clippy::too_many_arguments)]
 fn flow_leaf<R, P, F>(
     orthant: &Orthant,
@@ -351,6 +253,12 @@ fn flow_leaf<R, P, F>(
     }
 }
 
+/// Push boundary face contributions to neighboring orthants.
+///
+/// For each set bit in `extent`, the corresponding face (with that bit
+/// cleared) may live in the neighboring orthant one step further along that
+/// axis. Emits `(neighbor, face_extent, coef)` via `push` for faces within
+/// the complex bounds.
 fn push_boundary_neighbors<R: Ring>(
     orthant: &Orthant,
     extent: u32,
@@ -377,6 +285,12 @@ fn push_boundary_neighbors<R: Ring>(
     }
 }
 
+/// Push coboundary coface contributions to neighboring orthants.
+///
+/// For each cleared bit in `extent`, the corresponding coface (with that bit
+/// set) may live in the neighboring orthant one step earlier along that axis.
+/// Emits `(neighbor, coface_extent, coef)` via `push` for cofaces within the
+/// complex bounds.
 fn push_coboundary_neighbors<R: Ring>(
     orthant: &Orthant,
     extent: u32,
@@ -403,6 +317,11 @@ fn push_coboundary_neighbors<R: Ring>(
     }
 }
 
+/// Add boundary contributions that remain within the same orthant.
+///
+/// When a king cell's boundary face has its extent bit within `lower_extent`
+/// (i.e., the face is owned by this orthant rather than a neighbor), the
+/// face's coefficient is added back into the chain for further processing.
 fn add_boundary_same_orthant<R: Ring>(
     orthant_chain: &mut Chain<u32, R>,
     extent: u32,
@@ -423,6 +342,12 @@ fn add_boundary_same_orthant<R: Ring>(
     }
 }
 
+/// Add coboundary contributions that remain within the same orthant.
+///
+/// When a queen cell's coboundary coface has its extent bit within
+/// `upper_extent` (i.e., the coface is owned by this orthant rather than a
+/// neighbor), the coface's coefficient is added back into the chain for
+/// further processing.
 fn add_coboundary_same_orthant<R: Ring>(
     orthant_chain: &mut Chain<u32, R>,
     extent: u32,

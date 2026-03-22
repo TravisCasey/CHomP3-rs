@@ -96,7 +96,7 @@ macro_rules! define_ring_trait {
         ///
         /// When the `serde` feature flag is enabled, serde `Serialize` and
         /// `DeserializeOwned` bounds are required.
-        pub trait Ring: Sized + Clone + Eq + Debug + Additive + Multiplicative $(+ $bound)* {
+        pub trait Ring: Sized + Clone + Eq + Debug + Send + Sync + 'static + Additive + Multiplicative $(+ $bound)* {
             /// Creates a ring element representing the additive identity.
             #[must_use]
             fn zero() -> Self;

@@ -49,7 +49,6 @@ impl ProgressTracker {
 
     /// Set the tracing log level (default: INFO).
     #[must_use]
-    #[cfg_attr(not(feature = "mpi"), expect(dead_code))]
     pub(crate) fn with_level(mut self, level: Level) -> Self {
         self.level = level;
         self
