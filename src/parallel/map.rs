@@ -129,7 +129,7 @@ impl<'a> ParallelMap<'a> {
             #[cfg(feature = "mpi")]
             ExecutionBackend::MPI(comm) => {
                 let results = if comm.rank() == 0 {
-                    self.run_mpi_root(comm, items, &init, &compute)
+                    self.run_mpi_root(comm, items, init, compute)
                 } else {
                     let mut state = init();
                     Self::run_mpi_worker(comm, &mut state, &compute);
@@ -141,7 +141,7 @@ impl<'a> ParallelMap<'a> {
             #[cfg(all(feature = "mpi", feature = "rayon"))]
             ExecutionBackend::Hybrid(comm) => {
                 let results = if comm.rank() == 0 {
-                    self.run_mpi_root(comm, items, &init, &compute)
+                    self.run_mpi_root(comm, items, init, compute)
                 } else {
                     Self::run_hybrid_worker(comm, &init, &compute);
                     Vec::new()
@@ -199,25 +199,44 @@ impl<'a> ParallelMap<'a> {
             .collect()
     }
 
+    /// Run as MPI root: distribute work to workers and collect results.
+    ///
+    /// # Single-process fallback
+    ///
+    /// When no workers are available (single MPI process), falls back based
+    /// on `self.backend`:
+    /// - `MPI`: falls back to sequential execution.
+    /// - `Hybrid`: falls back to Rayon, preserving the user's intent for
+    ///   shared-memory parallelism.
+    ///
+    /// Takes `init` and `compute` by value so the Rayon fallback path can
+    /// move them into thread-local closures. The normal multi-worker path
+    /// does not use them (workers call `compute` independently).
     #[cfg(feature = "mpi")]
     fn run_mpi_root<I, S, F, C, R>(
         &self,
         comm: &SimpleCommunicator,
         items: I,
-        init: &impl Fn() -> S,
-        compute: &F,
+        init: impl Fn() -> S + Send + Sync,
+        compute: F,
     ) -> Vec<R>
     where
-        I: ExactSizeIterator,
+        I: ExactSizeIterator + Send,
         I::Item: MapItem,
-        F: Fn(&mut S, I::Item) -> C,
+        S: Send + 'static,
+        F: Fn(&mut S, I::Item) -> C + Send + Sync,
         C: IntoIterator<Item = R> + MapResult,
+        R: MapItem,
     {
         let mut active_workers = usize::try_from(comm.size() - 1).expect("invalid worker count");
 
         if active_workers == 0 {
             tracing::warn!("No MPI workers available, executing locally");
-            return self.run_sequential(items, init, compute);
+            #[cfg(feature = "rayon")]
+            if matches!(self.backend, ExecutionBackend::Hybrid(_)) {
+                return Self::run_rayon(items, init, compute);
+            }
+            return self.run_sequential(items, &init, &compute);
         }
 
         let total = items.len();
