@@ -107,7 +107,7 @@ impl Display for ExecutionBackend {
             #[cfg(feature = "rayon")]
             Self::Rayon => {
                 write!(f, "Rayon ({} threads)", rayon::current_num_threads())
-            }
+            },
             #[cfg(feature = "mpi")]
             Self::MPI(comm) => write!(f, "MPI ({} processes)", comm.size()),
             #[cfg(all(feature = "mpi", feature = "rayon"))]

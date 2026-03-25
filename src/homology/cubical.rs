@@ -75,8 +75,8 @@ use tracing::{info, warn};
 #[cfg(feature = "mpi")]
 use crate::{CellComplex, homology::full_reduce_sequential};
 use crate::{
-    CellMatch, Chain, Complex, Cube, CubicalComplex, Grader, MorseMatching, Orthant, Ring,
-    TopCubeGrader, parallel::map::ParallelMap,
+    CellMatch, Chain, Cube, CubicalComplex, Grader, MorseMatching, Orthant, Ring, TopCubeGrader,
+    parallel::map::ParallelMap,
 };
 
 mod builder;
@@ -171,7 +171,6 @@ where
 {
     complex: CubicalComplex<R, TopCubeGrader<G>>,
     critical_cells: Vec<Cube>,
-    boundaries: Vec<Chain<u32, R>>,
     projection: HashMap<Cube, u32>,
     config: TopCubicalMatchingConfig,
 }
@@ -215,7 +214,6 @@ where
         let mut matching = Self {
             complex,
             critical_cells: Vec::new(),
-            boundaries: Vec::new(),
             projection: HashMap::new(),
             config,
         };
@@ -234,7 +232,6 @@ where
         }
 
         self.compute_critical_cells();
-        self.compute_boundaries();
     }
 
     /// Recursive method used to iterate through the nested `orthant_matching`
@@ -363,19 +360,6 @@ where
         );
 
         self.store_critical_cells(critical_cells);
-    }
-
-    /// Compute boundaries for all critical cells.
-    fn compute_boundaries(&mut self) {
-        let complex = &self.complex;
-        self.boundaries = self
-            .critical_cells
-            .iter()
-            .map(|critical_cell| {
-                let boundary_chain = complex.cell_boundary(critical_cell);
-                self.lower(boundary_chain)
-            })
-            .collect();
     }
 
     /// Store critical cells and build the projection map.

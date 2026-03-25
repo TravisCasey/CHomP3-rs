@@ -138,27 +138,46 @@ impl ProgressTracker {
         match self.level {
             Level::TRACE => trace!(
                 "{}: {}% ({}/{}) - ETA: {}",
-                self.label, percent, self.current.load(Ordering::Relaxed), self.total, eta
+                self.label,
+                percent,
+                self.current.load(Ordering::Relaxed),
+                self.total,
+                eta
             ),
             Level::DEBUG => debug!(
                 "{}: {}% ({}/{}) - ETA: {}",
-                self.label, percent, self.current.load(Ordering::Relaxed), self.total, eta
+                self.label,
+                percent,
+                self.current.load(Ordering::Relaxed),
+                self.total,
+                eta
             ),
             Level::INFO => info!(
                 "{}: {}% ({}/{}) - ETA: {}",
-                self.label, percent, self.current.load(Ordering::Relaxed), self.total, eta
+                self.label,
+                percent,
+                self.current.load(Ordering::Relaxed),
+                self.total,
+                eta
             ),
             Level::WARN => warn!(
                 "{}: {}% ({}/{}) - ETA: {}",
-                self.label, percent, self.current.load(Ordering::Relaxed), self.total, eta
+                self.label,
+                percent,
+                self.current.load(Ordering::Relaxed),
+                self.total,
+                eta
             ),
             Level::ERROR => error!(
                 "{}: {}% ({}/{}) - ETA: {}",
-                self.label, percent, self.current.load(Ordering::Relaxed), self.total, eta
+                self.label,
+                percent,
+                self.current.load(Ordering::Relaxed),
+                self.total,
+                eta
             ),
         }
     }
-
 }
 
 /// Format a duration as a human-readable string.

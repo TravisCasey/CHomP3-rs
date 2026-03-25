@@ -129,8 +129,7 @@ impl GridSubdivision {
         let mut subgrid_index = Vec::with_capacity(dim);
         let mut next_subgrid = vec![false; dim];
         let mut nonempty_subgrid_set: HashSet<Vec<i16>> = HashSet::new();
-        let progress =
-            ProgressTracker::new("Subdividing grid", orthants.len()).with_interval(10);
+        let progress = ProgressTracker::new("Subdividing grid", orthants.len()).with_interval(10);
 
         for orthant in orthants {
             subgrid_index.clear();
