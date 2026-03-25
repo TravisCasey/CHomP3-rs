@@ -124,7 +124,7 @@ impl<'a> ParallelMap<'a> {
             ExecutionBackend::Sequential => self.run_sequential(items, &init, &compute),
 
             #[cfg(feature = "rayon")]
-            ExecutionBackend::Rayon => Self::run_rayon(items, init, compute),
+            ExecutionBackend::Rayon => self.run_rayon(items, init, compute),
 
             #[cfg(feature = "mpi")]
             ExecutionBackend::MPI(comm) => {
@@ -151,13 +151,13 @@ impl<'a> ParallelMap<'a> {
         }
     }
 
-    fn make_progress_tracker(&self, total: usize) -> ProgressTracker {
-        let label = self.label.as_deref().unwrap_or("ParallelMap");
+    fn make_progress_tracker(&self, total: usize) -> Option<ProgressTracker> {
+        let label = self.label.as_deref()?;
         let mut tracker = ProgressTracker::new(label, total);
         if let Some(level) = self.log_level {
             tracker = tracker.with_level(level);
         }
-        tracker
+        Some(tracker)
     }
 
     fn run_sequential<I, S, F, C, R>(&self, items: I, init: &impl Fn() -> S, compute: &F) -> Vec<R>
@@ -167,21 +167,30 @@ impl<'a> ParallelMap<'a> {
         C: IntoIterator<Item = R>,
     {
         let total = items.len();
-        let mut progress = self.make_progress_tracker(total);
+        let progress = self.make_progress_tracker(total);
         let mut state = init();
         let results = items
             .flat_map(|item| {
                 let result = compute(&mut state, item);
-                progress.increment();
+                if let Some(p) = &progress {
+                    p.increment();
+                }
                 result
             })
             .collect();
-        progress.finish();
+        if let Some(p) = &progress {
+            p.finish();
+        }
         results
     }
 
     #[cfg(feature = "rayon")]
-    fn run_rayon<I, S, F, C, R>(items: I, init: impl Fn() -> S + Send + Sync, compute: F) -> Vec<R>
+    fn run_rayon<I, S, F, C, R>(
+        &self,
+        items: I,
+        init: impl Fn() -> S + Send + Sync,
+        compute: F,
+    ) -> Vec<R>
     where
         I: ExactSizeIterator + Send,
         I::Item: Send,
@@ -192,11 +201,25 @@ impl<'a> ParallelMap<'a> {
     {
         use rayon::iter::ParallelIterator as _;
 
-        items
+        let total = items.len();
+        let progress = self.make_progress_tracker(total);
+
+        let results = items
             .par_bridge()
-            .map_init(init, |state, item| compute(state, item))
+            .map_init(init, |state, item| {
+                let result = compute(state, item);
+                if let Some(p) = &progress {
+                    p.increment();
+                }
+                result
+            })
             .flat_map_iter(|c| c)
-            .collect()
+            .collect();
+
+        if let Some(p) = &progress {
+            p.finish();
+        }
+        results
     }
 
     /// Run as MPI root: distribute work to workers and collect results.
@@ -234,7 +257,7 @@ impl<'a> ParallelMap<'a> {
             tracing::warn!("No MPI workers available, executing locally");
             #[cfg(feature = "rayon")]
             if matches!(self.backend, ExecutionBackend::Hybrid(_)) {
-                return Self::run_rayon(items, init, compute);
+                return self.run_rayon(items, init, compute);
             }
             return self.run_sequential(items, &init, &compute);
         }
@@ -243,7 +266,7 @@ impl<'a> ParallelMap<'a> {
         let batch_size = self.batch_size;
         let mut work_iter = items.peekable();
         let mut results = Vec::new();
-        let mut progress = self.make_progress_tracker(total);
+        let progress = self.make_progress_tracker(total);
 
         while active_workers > 0 {
             let (msg_bytes, status): (Vec<u8>, _) = comm.any_process().receive_vec();
@@ -267,7 +290,9 @@ impl<'a> ParallelMap<'a> {
                 for batch_result in worker_results {
                     results.extend(batch_result);
                 }
-                progress.increment_by(items_completed);
+                if let Some(p) = &progress {
+                    p.increment_by(items_completed);
+                }
 
                 Self::assign_batch_or_shutdown(
                     comm,
@@ -281,7 +306,9 @@ impl<'a> ParallelMap<'a> {
             }
         }
 
-        progress.finish();
+        if let Some(p) = &progress {
+            p.finish();
+        }
         results
     }
 

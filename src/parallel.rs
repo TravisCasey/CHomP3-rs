@@ -7,7 +7,7 @@
 //! strategy and [`ParallelMap`](map::ParallelMap) for backend-agnostic batch
 //! parallel computation.
 
-use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 
 #[cfg(feature = "mpi")]
 use mpi::{topology::SimpleCommunicator, traits::Communicator};
@@ -96,6 +96,27 @@ impl Debug for ExecutionBackend {
             Self::MPI(_) => write!(f, "MPI"),
             #[cfg(all(feature = "mpi", feature = "rayon"))]
             Self::Hybrid(_) => write!(f, "Hybrid"),
+        }
+    }
+}
+
+impl Display for ExecutionBackend {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::Sequential => write!(f, "Sequential"),
+            #[cfg(feature = "rayon")]
+            Self::Rayon => {
+                write!(f, "Rayon ({} threads)", rayon::current_num_threads())
+            }
+            #[cfg(feature = "mpi")]
+            Self::MPI(comm) => write!(f, "MPI ({} processes)", comm.size()),
+            #[cfg(all(feature = "mpi", feature = "rayon"))]
+            Self::Hybrid(comm) => write!(
+                f,
+                "Hybrid ({} processes x {} threads)",
+                comm.size(),
+                rayon::current_num_threads()
+            ),
         }
     }
 }

@@ -287,7 +287,7 @@ where
         debug!("Coreduction: matched {initial_matched} of {initial_pair_count} initial pairs");
 
         let mut leaves_processed = 0usize;
-        let mut progress = ProgressTracker::new("Coreduction", cell_count).with_interval(10);
+        let progress = ProgressTracker::new("Coreduction", cell_count).with_interval(10);
         while let Some(node_index) = matching.leaves.pop_front() {
             debug_assert!(
                 matching.nodes[node_index].faces.is_empty(),

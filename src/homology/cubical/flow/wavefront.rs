@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     Chain, Complex, Cube, Grader, MorseMatching, Orthant, Ring, TopCubicalMatching,
-    homology::cubical::Subgrid, parallel::map::ParallelMap,
+    homology::cubical::Subgrid, logging::ProgressTracker, parallel::map::ParallelMap,
 };
 
 /// Configuration for wavefront traversal direction.
@@ -148,6 +148,7 @@ fn level_loop<R, G, CF>(
     wavefront_config: WavefrontConfig,
     grade_cap: u32,
     cell_filter: CF,
+    label: &str,
 ) -> Vec<(Orthant, u32, R)>
 where
     R: Ring,
@@ -160,6 +161,16 @@ where
     let min_orthant = complex.minimum().clone();
     let max_orthant = complex.maximum().clone();
 
+    // Track progress across levels using the complex's coordinate-sum range.
+    let min_level = orthant_level(&min_orthant);
+    let max_level = orthant_level(&max_orthant);
+    let total_levels = (max_level - min_level + 1).max(0) as usize;
+    let progress = ProgressTracker::new(label, total_levels).with_interval(10);
+    let level_origin = match wavefront_config {
+        WavefrontConfig::Boundary => min_level,
+        WavefrontConfig::Coboundary => max_level,
+    };
+
     let mut collected_cells = Vec::new();
 
     loop {
@@ -167,6 +178,16 @@ where
 
         if backend.is_done(sub_batch.is_empty() && frontier.is_empty()) {
             break;
+        }
+
+        // Update progress based on how far through the level range we are.
+        if let Some((first_orthant, _)) = sub_batch.first() {
+            let current_level = orthant_level(first_orthant);
+            let levels_done = match wavefront_config {
+                WavefrontConfig::Boundary => current_level - level_origin + 1,
+                WavefrontConfig::Coboundary => level_origin - current_level + 1,
+            };
+            progress.set(levels_done.max(0) as usize);
         }
 
         let batch_results = ParallelMap::new(backend).run_with_state(
@@ -213,6 +234,7 @@ where
         }
     }
 
+    progress.finish();
     collected_cells
 }
 
@@ -239,6 +261,7 @@ where
             FlowCell::Ace { extent, coef } => Some((extent, coef)),
             _ => None,
         },
+        "Lower",
     );
 
     let mut result = Chain::new();
@@ -275,6 +298,7 @@ where
             FlowCell::Ace { extent, coef } => Some((extent, coef)),
             _ => None,
         },
+        "Colower",
     );
 
     let mut result = Chain::new();
@@ -319,6 +343,7 @@ where
             FlowCell::Queen { king_extent, coef } => Some((king_extent, coef)),
             _ => None,
         },
+        "Lift",
     );
 
     for (orthant, king_extent, coef) in cells {
@@ -359,6 +384,7 @@ where
             FlowCell::King { queen_extent, coef } => Some((queen_extent, coef)),
             _ => None,
         },
+        "Colift",
     );
 
     for (orthant, queen_extent, coef) in cells {
