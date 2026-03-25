@@ -66,8 +66,6 @@
 
 use std::{collections::HashMap, fmt::Debug, iter::zip};
 
-#[cfg(feature = "mpi")]
-use mpi::traits::Communicator;
 pub use subgrid::{GridSubdivision, OrthantMatching, Subgrid};
 #[cfg(feature = "mpi")]
 use tracing::{info, warn};
@@ -421,6 +419,9 @@ where
         self.critical_cells[cell as usize].clone()
     }
 
+    /// Only root performs the sequential coreduction rounds. Non-root
+    /// processes skip the work entirely; results are synchronized during
+    /// subsequent wavefront flow operations.
     #[cfg(feature = "mpi")]
     fn full_reduce<PM>(
         &self,
@@ -431,26 +432,14 @@ where
                 UpperCell = u32,
                 Ring = Self::Ring,
                 UpperComplex = CellComplex<Self::Ring>,
-            > + serde::Serialize
-            + serde::de::DeserializeOwned,
+            >,
     {
         let morse_complex = self.construct_morse_complex();
 
-        if let Some(comm) = self.config.backend.communicator()
-            && comm.size() > 1
-        {
-            let (further_matchings, final_complex) = if comm.rank() == 0 {
-                full_reduce_sequential(factory, morse_complex)
-            } else {
-                (Vec::new(), CellComplex::new(vec![], vec![], vec![], vec![]))
-            };
-
-            let further_matchings = crate::parallel::mpi_utils::broadcast(comm, &further_matchings);
-            let final_complex = crate::parallel::mpi_utils::broadcast(comm, &final_complex);
-
-            (further_matchings, final_complex)
-        } else {
+        if self.config.backend.is_root() {
             full_reduce_sequential(factory, morse_complex)
+        } else {
+            (Vec::new(), morse_complex)
         }
     }
 

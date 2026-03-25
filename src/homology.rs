@@ -74,50 +74,6 @@ pub mod cubical;
 mod linked_list;
 mod morse;
 
-// Macro to generate `full_reduce` with cfg-gated serde bounds on `PM`.
-// When `serde` is enabled, `PM` must be serializable so that specialized
-// overrides can broadcast results across processes.
-macro_rules! define_full_reduce {
-    ($($bound:path),* $(,)?) => {
-        /// Fully reduce `self` via discrete Morse theory until no further
-        /// reduction is possible.
-        ///
-        /// This method builds the Morse complex from `self`, then repeatedly
-        /// applies `factory` to the resulting Morse complexes until the cell
-        /// count no longer decreases.
-        ///
-        /// # Matching Types
-        ///
-        /// The first matching (`self`) can exploit special structure in the
-        /// original complex (e.g., [`TopCubicalMatching`] for cubical
-        /// complexes). However, the resulting Morse complex is a general
-        /// [`CellComplex`], so subsequent matchings use a general-purpose
-        /// algorithm. Pass [`CoreductionMatching::new`] (the function itself,
-        /// not a call to it) as `factory` for this purpose.
-        ///
-        /// # Returns
-        ///
-        /// A tuple of:
-        /// - A vector of the matchings performed after the first step
-        /// - The final Morse complex (no longer reducible via Morse matchings)
-        fn full_reduce<PM>(
-            &self,
-            factory: impl Fn(CellComplex<Self::Ring>) -> PM,
-        ) -> (Vec<PM>, CellComplex<Self::Ring>)
-        where
-            PM: MorseMatching<
-                    UpperCell = u32,
-                    Ring = Self::Ring,
-                    UpperComplex = CellComplex<Self::Ring>,
-                >
-                $(+ $bound)*,
-        {
-            let morse_complex = self.construct_morse_complex();
-            full_reduce_sequential(factory, morse_complex)
-        }
-    };
-}
-
 /// The interface for computing an acyclic partial matching for discrete Morse
 /// theoretic cell complex reductions.
 ///
@@ -206,14 +162,48 @@ where
         CellComplex::new(cell_dimensions, grades, boundaries, coboundaries)
     }
 
-    // The `full_reduce` default method requires serde bounds on `PM` when
-    // the `serde` feature is enabled, because specialized overrides (e.g.,
-    // `TopCubicalMatching`) may broadcast `PM` across MPI processes. A macro
-    // avoids duplicating the documentation between the two cfg variants.
-    #[cfg(not(feature = "serde"))]
-    define_full_reduce!();
-    #[cfg(feature = "serde")]
-    define_full_reduce!(serde::Serialize, serde::de::DeserializeOwned);
+    /// Fully reduce `self` via discrete Morse theory until no further
+    /// reduction is possible.
+    ///
+    /// Builds the Morse complex from `self`, then repeatedly applies
+    /// `factory` to the resulting Morse complexes until the cell count no
+    /// longer decreases.
+    ///
+    /// # Matching Types
+    ///
+    /// The first matching (`self`) can exploit special structure in the
+    /// original complex (e.g., [`TopCubicalMatching`] for cubical
+    /// complexes). However, the resulting Morse complex is a general
+    /// [`CellComplex`], so subsequent matchings use a general-purpose
+    /// algorithm. Pass [`CoreductionMatching::new`] (the function itself,
+    /// not a call to it) as `factory` for this purpose.
+    ///
+    /// # MPI
+    ///
+    /// When using an MPI-based [`ExecutionBackend`](crate::ExecutionBackend),
+    /// only the root process (rank 0) performs the sequential reduction.
+    /// Non-root processes return empty results; synchronization occurs
+    /// during subsequent wavefront flow operations.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of:
+    /// - A vector of the matchings performed after the first step
+    /// - The final Morse complex (no longer reducible via Morse matchings)
+    fn full_reduce<PM>(
+        &self,
+        factory: impl Fn(CellComplex<Self::Ring>) -> PM,
+    ) -> (Vec<PM>, CellComplex<Self::Ring>)
+    where
+        PM: MorseMatching<
+                UpperCell = u32,
+                Ring = Self::Ring,
+                UpperComplex = CellComplex<Self::Ring>,
+            >,
+    {
+        let morse_complex = self.construct_morse_complex();
+        full_reduce_sequential(factory, morse_complex)
+    }
 
     /// Return a reference to the parent cell complex.
     #[must_use]
