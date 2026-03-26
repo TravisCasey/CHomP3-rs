@@ -241,7 +241,7 @@ where
         cube: Cube,
         extent: u32,
         orthant_matching: &OrthantMatching,
-    ) -> CellMatch<Cube, R, Orthant> {
+    ) -> CellMatch<Cube, R> {
         match orthant_matching {
             OrthantMatching::Critical { .. } => CellMatch::Ace { cell: cube },
             OrthantMatching::Leaf { match_axis, .. } => {
@@ -253,7 +253,6 @@ where
 
                 // If the cube has extent along the match axis, it is a king;
                 // Else, it is a queen.
-                let base_orthant = cube.base().clone();
                 let mut matched_cell = cube.clone();
                 if cube.base_coord(*match_axis as usize) == cube.dual_coord(*match_axis as usize) {
                     matched_cell.dual_mut()[*match_axis as usize] -= 1;
@@ -261,7 +260,6 @@ where
                         cell: cube,
                         queen: matched_cell,
                         incidence,
-                        priority: base_orthant,
                     }
                 } else {
                     matched_cell.dual_mut()[*match_axis as usize] += 1;
@@ -269,7 +267,6 @@ where
                         cell: cube,
                         king: matched_cell,
                         incidence,
-                        priority: base_orthant,
                     }
                 }
             },
@@ -374,7 +371,6 @@ where
     R: Ring,
     G: Grader<Orthant> + Clone + Send + Sync,
 {
-    type Priority = Orthant;
     type Ring = R;
     type UpperCell = Cube;
     type UpperComplex = CubicalComplex<R, TopCubeGrader<G>>;
@@ -387,7 +383,7 @@ where
         self.complex
     }
 
-    fn match_cell(&self, cube: &Cube) -> CellMatch<Cube, Self::Ring, Self::Priority> {
+    fn match_cell(&self, cube: &Cube) -> CellMatch<Cube, Self::Ring> {
         let matching = {
             let mut subgrid = Subgrid::new(&self.complex, u32::MAX, u32::MAX);
             subgrid.match_subgrid(cube.base().clone(), cube.base().clone())[0]

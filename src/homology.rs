@@ -61,7 +61,7 @@
 //! - Harker, Mischaikow, Mrozek, and Nanda, *Discrete Morse Theoretic
 //!   Algorithms for Computing Homology of Complexes and Maps*.
 
-use std::{cmp::Reverse, collections::BinaryHeap, fmt::Debug, hash::Hash};
+use std::{fmt::Debug, hash::Hash};
 
 pub use coreduction::CoreductionMatching;
 pub use cubical::{TopCubicalMatching, TopCubicalMatchingBuilder};
@@ -122,17 +122,6 @@ where
 
     /// The parent cell complex type on which the matching is performed.
     type UpperComplex: Complex<Cell = Self::UpperCell, Ring = Self::Ring>;
-
-    /// Priority type for ordering cells during (co)lowering and (co)lifting.
-    ///
-    /// The priority can dramatically improve efficiency by processing cells in
-    /// an intelligent order. Specifically, a queen cell `q` matched to king
-    /// cell `k` should have priority less than or equal to the queen cells in
-    /// the boundary of `k`.
-    ///
-    /// See [`CellMatch`] and [`match_cell`](MorseMatching::match_cell) for
-    /// details.
-    type Priority: Ord;
 
     /// Construct the Morse complex from this acyclic partial matching.
     ///
@@ -316,18 +305,8 @@ where
     ///
     /// Returns a [`CellMatch`] indicating whether `cell` is a king, queen,
     /// or ace (critical), along with match details.
-    ///
-    /// # Priority
-    ///
-    /// The priority in the returned [`CellMatch`] affects efficiency of
-    /// (co)lowering and (co)lifting. For optimal performance, a queen cell `q`
-    /// matched to king `k` should have priority less than or equal to the
-    /// queens in the boundary of `k`.
     #[must_use]
-    fn match_cell(
-        &self,
-        cell: &Self::UpperCell,
-    ) -> CellMatch<Self::UpperCell, Self::Ring, Self::Priority>;
+    fn match_cell(&self, cell: &Self::UpperCell) -> CellMatch<Self::UpperCell, Self::Ring>;
 
     /// Lower a chain from the parent complex to the Morse complex.
     ///
@@ -345,16 +324,14 @@ where
         // Result chain with only critical (ace) cells
         let mut lowered_chain = Chain::<u32, Self::Ring>::new();
 
-        // Min heap via Reverse(_)
-        let mut queen_queue = BinaryHeap::new();
+        let mut queen_stack = Vec::new();
 
         // Categorize initial input
         for (cell, coef) in chain {
-            let match_result = self.match_cell(&cell);
-            match match_result {
+            match self.match_cell(&cell) {
                 CellMatch::Queen { .. } => {
-                    queen_chain.insert_or_add(cell, coef);
-                    queen_queue.push(Reverse(match_result));
+                    queen_chain.insert_or_add(cell.clone(), coef);
+                    queen_stack.push(cell);
                 },
                 CellMatch::Ace { .. } => {
                     lowered_chain.insert_or_add(
@@ -368,26 +345,24 @@ where
         }
 
         // Eliminate queens
-        while let Some(Reverse(CellMatch::Queen {
-            cell,
-            king,
-            incidence,
-            ..
-        })) = pop_until(&mut queen_queue, |item| {
-            if let CellMatch::Queen { cell, .. } = &item.0 {
-                return queen_chain.coefficient(cell) != Self::Ring::zero();
+        while let Some(queen_cell) = queen_stack.pop() {
+            if queen_chain.coefficient(&queen_cell) == Self::Ring::zero() {
+                continue;
             }
-            panic!("Queen queue populated with non-queen cell");
-        }) {
-            let queen_coefficient = queen_chain.coefficient(&cell);
+            let CellMatch::Queen {
+                king, incidence, ..
+            } = self.match_cell(&queen_cell)
+            else {
+                panic!("queen stack populated with non-queen cell");
+            };
+            let queen_coefficient = queen_chain.coefficient(&queen_cell);
             // Incidence between matched cells must be invertible
             let cancel_coefficient = -queen_coefficient * incidence.invert().unwrap();
             for (cell, coef) in upper.cell_boundary(&king).scalar_mul(&cancel_coefficient) {
-                let match_result = self.match_cell(&cell);
-                match match_result {
+                match self.match_cell(&cell) {
                     CellMatch::Queen { .. } => {
-                        queen_chain.insert_or_add(cell, coef);
-                        queen_queue.push(Reverse(match_result));
+                        queen_chain.insert_or_add(cell.clone(), coef);
+                        queen_stack.push(cell);
                     },
                     CellMatch::Ace { .. } => {
                         lowered_chain.insert_or_add(
@@ -430,31 +405,34 @@ where
         // Current boundary being processed
         let mut boundary_chain = upper.boundary(&lifted_chain);
 
-        // Min heap via Reverse(_)
-        let mut queen_queue = BinaryHeap::new();
+        let mut queen_stack = Vec::new();
         loop {
             // Boundary cells which are queens need further propagation
             for (cell, coef) in boundary_chain {
-                let match_result = self.match_cell(&cell);
-                if let CellMatch::Queen { .. } = match_result {
-                    queen_chain.insert_or_add(cell, coef);
-                    queen_queue.push(Reverse(match_result));
+                if let CellMatch::Queen { .. } = self.match_cell(&cell) {
+                    queen_chain.insert_or_add(cell.clone(), coef);
+                    queen_stack.push(cell);
                 }
             }
 
             // Find next queen with nonzero coefficient
-            if let Some(Reverse(CellMatch::Queen {
-                cell,
-                king,
-                incidence,
-                ..
-            })) = pop_until(&mut queen_queue, |item| {
-                if let CellMatch::Queen { cell, .. } = &item.0 {
-                    return queen_chain.coefficient(cell) != Self::Ring::zero();
+            let queen_cell = loop {
+                let Some(cell) = queen_stack.pop() else {
+                    break None;
+                };
+                if queen_chain.coefficient(&cell) != Self::Ring::zero() {
+                    break Some(cell);
                 }
-                panic!("Queen queue populated with non-queen cell");
-            }) {
-                let queen_coefficient = queen_chain.coefficient(&cell);
+            };
+
+            if let Some(queen_cell) = queen_cell {
+                let CellMatch::Queen {
+                    king, incidence, ..
+                } = self.match_cell(&queen_cell)
+                else {
+                    panic!("queen stack populated with non-queen cell");
+                };
+                let queen_coefficient = queen_chain.coefficient(&queen_cell);
                 // Incidence between matched cells must be invertible
                 let cancel_coefficient = -queen_coefficient * incidence.invert().unwrap();
                 boundary_chain = upper.cell_boundary(&king).scalar_mul(&cancel_coefficient);
@@ -492,16 +470,14 @@ where
         // Result cochain with only critical cells
         let mut colowered_cochain = Chain::<u32, Self::Ring>::new();
 
-        // Max heap
-        let mut king_queue = BinaryHeap::new();
+        let mut king_stack = Vec::new();
 
         // Categorize initial input
         for (cell, coef) in cochain {
-            let match_result = self.match_cell(&cell);
-            match match_result {
+            match self.match_cell(&cell) {
                 CellMatch::King { .. } => {
-                    king_cochain.insert_or_add(cell, coef);
-                    king_queue.push(match_result);
+                    king_cochain.insert_or_add(cell.clone(), coef);
+                    king_stack.push(cell);
                 },
                 CellMatch::Ace { .. } => {
                     colowered_cochain.insert_or_add(
@@ -515,29 +491,27 @@ where
         }
 
         // Eliminate kings
-        while let Some(CellMatch::King {
-            cell,
-            queen,
-            incidence,
-            ..
-        }) = pop_until(&mut king_queue, |item| {
-            if let CellMatch::King { cell, .. } = &item {
-                return king_cochain.coefficient(cell) != Self::Ring::zero();
+        while let Some(king_cell) = king_stack.pop() {
+            if king_cochain.coefficient(&king_cell) == Self::Ring::zero() {
+                continue;
             }
-            panic!("King queue populated with non-king cell");
-        }) {
-            let king_coefficient = king_cochain.coefficient(&cell);
+            let CellMatch::King {
+                queen, incidence, ..
+            } = self.match_cell(&king_cell)
+            else {
+                panic!("king stack populated with non-king cell");
+            };
+            let king_coefficient = king_cochain.coefficient(&king_cell);
             // Incidence between matched cells must be invertible
             let cancel_coefficient = -king_coefficient * incidence.invert().unwrap();
             for (cell, coef) in upper
                 .cell_coboundary(&queen)
                 .scalar_mul(&cancel_coefficient)
             {
-                let match_result = self.match_cell(&cell);
-                match match_result {
+                match self.match_cell(&cell) {
                     CellMatch::King { .. } => {
-                        king_cochain.insert_or_add(cell, coef);
-                        king_queue.push(match_result);
+                        king_cochain.insert_or_add(cell.clone(), coef);
+                        king_stack.push(cell);
                     },
                     CellMatch::Ace { .. } => {
                         colowered_cochain.insert_or_add(
@@ -581,31 +555,34 @@ where
         // Current coboundary being processed
         let mut coboundary_cochain = upper.coboundary(&colifted_cochain);
 
-        // Max heap
-        let mut king_queue = BinaryHeap::new();
+        let mut king_stack = Vec::new();
         loop {
             // Coboundary cells which are kings need further propagation
             for (cell, coef) in coboundary_cochain {
-                let match_result = self.match_cell(&cell);
-                if let CellMatch::King { .. } = match_result {
-                    king_cochain.insert_or_add(cell, coef);
-                    king_queue.push(match_result);
+                if let CellMatch::King { .. } = self.match_cell(&cell) {
+                    king_cochain.insert_or_add(cell.clone(), coef);
+                    king_stack.push(cell);
                 }
             }
 
             // Find next king with nonzero coefficient
-            if let Some(CellMatch::King {
-                cell,
-                queen,
-                incidence,
-                ..
-            }) = pop_until(&mut king_queue, |item| {
-                if let CellMatch::King { cell, .. } = &item {
-                    return king_cochain.coefficient(cell) != Self::Ring::zero();
+            let king_cell = loop {
+                let Some(cell) = king_stack.pop() else {
+                    break None;
+                };
+                if king_cochain.coefficient(&cell) != Self::Ring::zero() {
+                    break Some(cell);
                 }
-                panic!("King queue populated with non-king cell");
-            }) {
-                let king_coefficient = king_cochain.coefficient(&cell);
+            };
+
+            if let Some(king_cell) = king_cell {
+                let CellMatch::King {
+                    queen, incidence, ..
+                } = self.match_cell(&king_cell)
+                else {
+                    panic!("king stack populated with non-king cell");
+                };
+                let king_coefficient = king_cochain.coefficient(&king_cell);
                 // Incidence between matched cells must be invertible
                 let cancel_coefficient = -king_coefficient * incidence.invert().unwrap();
                 coboundary_cochain = upper
@@ -708,16 +685,6 @@ where
             .filter(|(cell, _)| upper.grade(cell) <= max_grade)
             .collect()
     }
-}
-
-/// Pop elements from `heap` until `predicate` is satisfied or heap is empty.
-fn pop_until<T: Ord>(heap: &mut BinaryHeap<T>, predicate: impl Fn(&T) -> bool) -> Option<T> {
-    while let Some(item) = heap.pop() {
-        if predicate(&item) {
-            return Some(item);
-        }
-    }
-    None
 }
 
 /// Sequential implementation of full reduction via discrete Morse theory.

@@ -102,7 +102,7 @@ where
     complex: C,
     critical_cells: Vec<C::Cell>,
     projection: HashMap<C::Cell, u32>,
-    matches: HashMap<C::Cell, CellMatch<C::Cell, C::Ring, u32>>,
+    matches: HashMap<C::Cell, CellMatch<C::Cell, C::Ring>>,
 }
 
 impl<C> CoreductionMatching<C>
@@ -134,7 +134,6 @@ impl<C> MorseMatching for CoreductionMatching<C>
 where
     C: Complex,
 {
-    type Priority = u32;
     type Ring = C::Ring;
     type UpperCell = C::Cell;
     type UpperComplex = C;
@@ -159,10 +158,7 @@ where
         self.critical_cells[cell as usize].clone()
     }
 
-    fn match_cell(
-        &self,
-        cell: &Self::UpperCell,
-    ) -> CellMatch<Self::UpperCell, Self::Ring, Self::Priority> {
+    fn match_cell(&self, cell: &Self::UpperCell) -> CellMatch<Self::UpperCell, Self::Ring> {
         self.matches[cell].clone()
     }
 }
@@ -199,7 +195,7 @@ where
     C: Complex,
 {
     critical_cells: Vec<C::Cell>,
-    matches: HashMap<C::Cell, CellMatch<C::Cell, C::Ring, u32>>,
+    matches: HashMap<C::Cell, CellMatch<C::Cell, C::Ring>>,
     indices: HashMap<C::Cell, u32>,
     leaves: LinkedList,
     nodes: Vec<CoreductionNode<C::Cell>>,
@@ -213,10 +209,7 @@ where
     #[allow(clippy::type_complexity)]
     fn compute_matching(
         complex: &C,
-    ) -> (
-        Vec<C::Cell>,
-        HashMap<C::Cell, CellMatch<C::Cell, C::Ring, u32>>,
-    ) {
+    ) -> (Vec<C::Cell>, HashMap<C::Cell, CellMatch<C::Cell, C::Ring>>) {
         // Map each cell in `complex` to its index in the iterator from
         // `complex.iter()`.
         // These indices are used to store the cells
@@ -381,7 +374,6 @@ where
                 cell: self.nodes[upper_index].cell.clone(),
                 queen: self.nodes[lower_index].cell.clone(),
                 incidence: self.faces[upper_face_index].incidence.clone(),
-                priority: self.matches.len() as u32,
             },
         );
         self.matches.insert(
@@ -390,7 +382,6 @@ where
                 cell: self.nodes[lower_index].cell.clone(),
                 king: self.nodes[upper_index].cell.clone(),
                 incidence: self.faces[upper_face_index].incidence.clone(),
-                priority: self.matches.len() as u32,
             },
         );
     }

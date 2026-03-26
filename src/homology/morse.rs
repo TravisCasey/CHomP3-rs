@@ -11,8 +11,6 @@
 //! - **Queen**: Matched "upward" to a king cell of one higher dimension
 //! - **Ace**: Unmatched (critical) cell that survives in the Morse complex
 
-use std::cmp::Ordering;
-
 /// The classification of a cell in an acyclic partial matching.
 ///
 /// This enum is returned by
@@ -24,19 +22,6 @@ use std::cmp::Ordering;
 ///
 /// - `T`: The cell type
 /// - `R`: The coefficient ring type (for incidence values)
-/// - `P`: The priority type for ordering (see below)
-///
-/// # Priority and Ordering
-///
-/// The priority type `P` enables efficient (co)lowering and (co)lifting
-/// operations by allowing cells to be processed in an optimal order. For best
-/// performance, a queen cell `q` matched to king `k` should have priority less
-/// than or equal to the queen cells in the boundary of `k`.
-///
-/// The [`Ord`] implementation uses the convention `King > Ace > Queen` when
-/// comparing across variants. Within the same variant, comparison uses the
-/// priority field. This ordering is designed for use with
-/// [`BinaryHeap`](std::collections::BinaryHeap).
 ///
 /// # Examples
 ///
@@ -45,8 +30,8 @@ use std::cmp::Ordering;
 /// ```
 /// use chomp3rs::CellMatch;
 ///
-/// fn describe_cell<T: std::fmt::Debug, R, P>(
-///     result: &CellMatch<T, R, P>,
+/// fn describe_cell<T: std::fmt::Debug, R>(
+///     result: &CellMatch<T, R>,
 /// ) -> String {
 ///     match result {
 ///         CellMatch::King { cell, queen, .. } => {
@@ -63,7 +48,7 @@ use std::cmp::Ordering;
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum CellMatch<T, R, P> {
+pub enum CellMatch<T, R> {
     /// A king cell matched to a queen of one lower dimension.
     King {
         /// The king cell itself.
@@ -73,8 +58,6 @@ pub enum CellMatch<T, R, P> {
         /// The incidence coefficient between king and queen. Must be
         /// invertible in the coefficient ring.
         incidence: R,
-        /// Priority for ordering operations. See [`CellMatch`] docs.
-        priority: P,
     },
 
     /// A queen cell matched to a king of one higher dimension.
@@ -86,8 +69,6 @@ pub enum CellMatch<T, R, P> {
         /// The incidence coefficient between queen and king. Must be
         /// invertible in the coefficient ring.
         incidence: R,
-        /// Priority for ordering operations. See [`CellMatch`] docs.
-        priority: P,
     },
 
     /// An ace (critical/unmatched) cell.
@@ -99,7 +80,7 @@ pub enum CellMatch<T, R, P> {
     },
 }
 
-impl<T, R, P> CellMatch<T, R, P> {
+impl<T, R> CellMatch<T, R> {
     /// Returns a reference to the cell this result describes.
     ///
     /// This works for all variants and returns the primary cell.
@@ -162,54 +143,16 @@ impl<T, R, P> CellMatch<T, R, P> {
     }
 }
 
-impl<T: Eq, R: Eq, P: Ord> PartialOrd for CellMatch<T, R, P> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<T: Eq, R: Eq, P: Ord> Ord for CellMatch<T, R, P> {
-    /// Compare two match results.
-    ///
-    /// The ordering follows the convention `King > Ace > Queen`. Within the
-    /// same variant (two kings or two queens), comparison uses the priority
-    /// field.
-    fn cmp(&self, other: &Self) -> Ordering {
-        match self {
-            CellMatch::King { priority, .. } => match other {
-                CellMatch::King {
-                    priority: other_priority,
-                    ..
-                } => priority.cmp(other_priority),
-                _ => Ordering::Greater,
-            },
-            CellMatch::Queen { priority, .. } => match other {
-                CellMatch::Queen {
-                    priority: other_priority,
-                    ..
-                } => priority.cmp(other_priority),
-                _ => Ordering::Less,
-            },
-            CellMatch::Ace { .. } => match other {
-                CellMatch::King { .. } => Ordering::Less,
-                CellMatch::Queen { .. } => Ordering::Greater,
-                CellMatch::Ace { .. } => Ordering::Equal,
-            },
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn accessors() {
-        let king: CellMatch<i32, i32, u32> = CellMatch::King {
+        let king: CellMatch<i32, i32> = CellMatch::King {
             cell: 1,
             queen: 0,
             incidence: -1,
-            priority: 10,
         };
 
         assert_eq!(king.cell(), &1);
@@ -219,11 +162,10 @@ mod tests {
         assert_eq!(king.matched_cell(), Some(&0));
         assert_eq!(king.incidence(), Some(&-1));
 
-        let queen: CellMatch<i32, i32, u32> = CellMatch::Queen {
+        let queen: CellMatch<i32, i32> = CellMatch::Queen {
             cell: 0,
             king: 1,
             incidence: -1,
-            priority: 5,
         };
 
         assert_eq!(queen.cell(), &0);
@@ -233,7 +175,7 @@ mod tests {
         assert_eq!(queen.matched_cell(), Some(&1));
         assert_eq!(queen.incidence(), Some(&-1));
 
-        let ace: CellMatch<i32, i32, u32> = CellMatch::Ace { cell: 2 };
+        let ace: CellMatch<i32, i32> = CellMatch::Ace { cell: 2 };
 
         assert_eq!(ace.cell(), &2);
         assert!(!ace.is_king());
@@ -244,72 +186,11 @@ mod tests {
     }
 
     #[test]
-    fn ordering_within_variant() {
-        let king1: CellMatch<i32, i32, u32> = CellMatch::King {
-            cell: 1,
-            queen: 0,
-            incidence: 1,
-            priority: 5,
-        };
-        let king2: CellMatch<i32, i32, u32> = CellMatch::King {
-            cell: 2,
-            queen: 0,
-            incidence: 1,
-            priority: 10,
-        };
-
-        assert!(king1 < king2); // Lower priority is less
-
-        let queen1: CellMatch<i32, i32, u32> = CellMatch::Queen {
-            cell: 0,
-            king: 1,
-            incidence: 1,
-            priority: 5,
-        };
-        let queen2: CellMatch<i32, i32, u32> = CellMatch::Queen {
-            cell: 0,
-            king: 2,
-            incidence: 1,
-            priority: 10,
-        };
-
-        assert!(queen1 < queen2); // Lower priority is less
-    }
-
-    #[test]
-    fn ordering_across_variants() {
-        let king: CellMatch<i32, i32, u32> = CellMatch::King {
-            cell: 1,
-            queen: 0,
-            incidence: 1,
-            priority: 0,
-        };
-        let queen: CellMatch<i32, i32, u32> = CellMatch::Queen {
-            cell: 0,
-            king: 1,
-            incidence: 1,
-            priority: 100,
-        };
-        let ace: CellMatch<i32, i32, u32> = CellMatch::Ace { cell: 2 };
-
-        // King > Ace > Queen regardless of priority
-        assert!(king > ace);
-        assert!(king > queen);
-        assert!(ace > queen);
-        assert!(ace < king);
-        assert!(queen < ace);
-        assert!(queen < king);
-    }
-
-    #[test]
     fn ace_equality() {
-        let ace1: CellMatch<i32, i32, u32> = CellMatch::Ace { cell: 1 };
-        let ace2: CellMatch<i32, i32, u32> = CellMatch::Ace { cell: 2 };
+        let ace1: CellMatch<i32, i32> = CellMatch::Ace { cell: 1 };
+        let ace2: CellMatch<i32, i32> = CellMatch::Ace { cell: 2 };
 
-        // Different aces compare as equal in ordering (both unmatched)
-        assert_eq!(ace1.cmp(&ace2), Ordering::Equal);
-
-        // But they are not equal by PartialEq
+        // Aces with different cells are not equal
         assert_ne!(ace1, ace2);
     }
 }
