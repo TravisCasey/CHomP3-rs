@@ -108,6 +108,10 @@ where
     lower_cache: RefCell<HashMap<C::Cell, Chain<u32, C::Ring>>>,
     #[cfg_attr(feature = "serde", serde(skip))]
     colower_cache: RefCell<HashMap<C::Cell, Chain<u32, C::Ring>>>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    lift_cache: RefCell<HashMap<C::Cell, Chain<C::Cell, C::Ring>>>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    colift_cache: RefCell<HashMap<C::Cell, Chain<C::Cell, C::Ring>>>,
 }
 
 impl<C> CoreductionMatching<C>
@@ -133,11 +137,14 @@ where
             matches,
             lower_cache: RefCell::new(HashMap::new()),
             colower_cache: RefCell::new(HashMap::new()),
+            lift_cache: RefCell::new(HashMap::new()),
+            colift_cache: RefCell::new(HashMap::new()),
         }
     }
 
-    /// Compute or retrieve the cached image of `cell` under the `lower` chain map.
-    /// Uses iterative DFS to resolve queen dependencies without deep recursion.
+    /// Compute or retrieve the cached image of `cell` under the `lower` chain
+    /// map. Uses iterative DFS to resolve queen dependencies without deep
+    /// recursion.
     fn lower_cell_cached(&self, cell: &C::Cell) -> Chain<u32, C::Ring> {
         match self.match_cell(cell) {
             CellMatch::Ace { .. } => {
@@ -312,6 +319,154 @@ where
 
         self.colower_cache.borrow().get(cell).unwrap().clone()
     }
+
+    /// Compute or retrieve the cached lift of a queen cell to the upper
+    /// complex. Uses iterative DFS to resolve queen dependencies without
+    /// deep recursion.
+    fn lift_queen_cached(&self, cell: &C::Cell) -> Chain<C::Cell, C::Ring> {
+        debug_assert!(
+            matches!(self.match_cell(cell), CellMatch::Queen { .. }),
+            "lift_queen_cached called on non-queen cell"
+        );
+
+        if let Some(cached) = self.lift_cache.borrow().get(cell) {
+            return cached.clone();
+        }
+
+        // Iterative DFS: only queens go on the stack and in the cache
+        let mut stack: Vec<C::Cell> = vec![cell.clone()];
+
+        while let Some(current) = stack.last() {
+            let current = current.clone();
+            if self.lift_cache.borrow().contains_key(&current) {
+                stack.pop();
+                continue;
+            }
+
+            let CellMatch::Queen {
+                king, incidence, ..
+            } = self.match_cell(&current)
+            else {
+                unreachable!("non-queen on the DFS stack");
+            };
+
+            let boundary = self.complex.cell_boundary(&king);
+
+            // Check if all queen dependencies are cached (skip self)
+            let mut all_cached = true;
+            for (face, _) in &boundary {
+                if *face == current {
+                    continue;
+                }
+                if self.match_cell(face).is_queen() && !self.lift_cache.borrow().contains_key(face)
+                {
+                    stack.push(face.clone());
+                    all_cached = false;
+                }
+            }
+
+            if all_cached {
+                // lift(q) = {king: -(1/incidence)}
+                //   + sum_{queen f != q} -(1/incidence) * coef_f * lift(f)
+                let inv = incidence.invert().expect("non-invertible incidence");
+                let mut result = Chain::from([(king.clone(), -(inv.clone()))]);
+                let cache = self.lift_cache.borrow();
+                for (face, coef) in &boundary {
+                    if *face == current {
+                        continue;
+                    }
+                    if self.match_cell(face).is_queen() {
+                        let face_lift = &cache[face];
+                        for (upper_cell, face_coef) in face_lift {
+                            result.insert_or_add(
+                                upper_cell.clone(),
+                                -(inv.clone()) * coef.clone() * face_coef.clone(),
+                            );
+                        }
+                    }
+                }
+                drop(cache);
+                self.lift_cache.borrow_mut().insert(current, result);
+                stack.pop();
+            }
+        }
+
+        self.lift_cache.borrow().get(cell).unwrap().clone()
+    }
+
+    /// Dual of [`lift_queen_cached`](Self::lift_queen_cached) via coboundaries.
+    /// Caches king cells; queens and aces in the coboundary are ignored.
+    fn colift_king_cached(&self, cell: &C::Cell) -> Chain<C::Cell, C::Ring> {
+        debug_assert!(
+            matches!(self.match_cell(cell), CellMatch::King { .. }),
+            "colift_king_cached called on non-king cell"
+        );
+
+        if let Some(cached) = self.colift_cache.borrow().get(cell) {
+            return cached.clone();
+        }
+
+        // Iterative DFS: only kings go on the stack and in the cache
+        let mut stack: Vec<C::Cell> = vec![cell.clone()];
+
+        while let Some(current) = stack.last() {
+            let current = current.clone();
+            if self.colift_cache.borrow().contains_key(&current) {
+                stack.pop();
+                continue;
+            }
+
+            let CellMatch::King {
+                queen, incidence, ..
+            } = self.match_cell(&current)
+            else {
+                unreachable!("non-king on the DFS stack");
+            };
+
+            let coboundary = self.complex.cell_coboundary(&queen);
+
+            // Check if all king dependencies are cached (skip self)
+            let mut all_cached = true;
+            for (coface, _) in &coboundary {
+                if *coface == current {
+                    continue;
+                }
+                if self.match_cell(coface).is_king()
+                    && !self.colift_cache.borrow().contains_key(coface)
+                {
+                    stack.push(coface.clone());
+                    all_cached = false;
+                }
+            }
+
+            if all_cached {
+                // colift(k) = {queen: -(1/incidence)}
+                //   + sum_{king f != k} -(1/incidence) * coef_f * colift(f)
+                let inv = incidence.invert().expect("non-invertible incidence");
+                let mut result = Chain::from([(queen.clone(), -(inv.clone()))]);
+                let cache = self.colift_cache.borrow();
+                for (coface, coef) in &coboundary {
+                    if *coface == current {
+                        continue;
+                    }
+                    if self.match_cell(coface).is_king() {
+                        let coface_colift = &cache[coface];
+                        for (upper_cell, coface_coef) in coface_colift {
+                            result.insert_or_add(
+                                upper_cell.clone(),
+                                -(inv.clone()) * coef.clone() * coface_coef.clone(),
+                            );
+                        }
+                    }
+                }
+                drop(cache);
+                self.colift_cache.borrow_mut().insert(current, result);
+                stack.pop();
+            }
+        }
+
+        self.colift_cache.borrow().get(cell).unwrap().clone()
+    }
 }
 
 impl<C> MorseMatching for CoreductionMatching<C>
@@ -374,6 +529,60 @@ where
                 result.insert_or_add(*morse_cell, coef.clone() * colowered_coef.clone());
             }
         }
+        result
+    }
+
+    fn lift(&self, chain: impl IntoIterator<Item = (u32, C::Ring)>) -> Chain<C::Cell, C::Ring> {
+        let upper = &self.complex;
+        let mut result = Chain::<C::Cell, C::Ring>::new();
+
+        for (morse_cell, coef) in chain {
+            if coef == C::Ring::zero() {
+                continue;
+            }
+            result.insert_or_add(self.include_cell(morse_cell), coef);
+        }
+
+        let boundary = upper.boundary(&result);
+        for (cell, coef) in boundary {
+            if coef == C::Ring::zero() {
+                continue;
+            }
+            if self.match_cell(&cell).is_queen() {
+                let lifted_queen = self.lift_queen_cached(&cell);
+                for (upper_cell, lifted_coef) in &lifted_queen {
+                    result.insert_or_add(upper_cell.clone(), coef.clone() * lifted_coef.clone());
+                }
+            }
+        }
+
+        result
+    }
+
+    fn colift(&self, cochain: impl IntoIterator<Item = (u32, C::Ring)>) -> Chain<C::Cell, C::Ring> {
+        let upper = &self.complex;
+        let mut result = Chain::<C::Cell, C::Ring>::new();
+
+        for (morse_cell, coef) in cochain {
+            if coef == C::Ring::zero() {
+                continue;
+            }
+            result.insert_or_add(self.include_cell(morse_cell), coef);
+        }
+
+        let coboundary = upper.coboundary(&result);
+        for (cell, coef) in coboundary {
+            if coef == C::Ring::zero() {
+                continue;
+            }
+            if self.match_cell(&cell).is_king() {
+                let colifted_king = self.colift_king_cached(&cell);
+                for (upper_cell, colifted_coef) in &colifted_king {
+                    result.insert_or_add(upper_cell.clone(), coef.clone() * colifted_coef.clone());
+                }
+            }
+        }
+
         result
     }
 }
