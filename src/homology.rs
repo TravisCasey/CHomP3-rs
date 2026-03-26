@@ -167,13 +167,6 @@ where
     /// algorithm. Pass [`CoreductionMatching::new`] (the function itself,
     /// not a call to it) as `factory` for this purpose.
     ///
-    /// # MPI
-    ///
-    /// When using an MPI-based [`ExecutionBackend`](crate::ExecutionBackend),
-    /// only the root process (rank 0) performs the sequential reduction.
-    /// Non-root processes return empty results; synchronization occurs
-    /// during subsequent wavefront flow operations.
-    ///
     /// # Returns
     ///
     /// A tuple of:

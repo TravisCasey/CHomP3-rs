@@ -70,8 +70,6 @@ pub use subgrid::{GridSubdivision, OrthantMatching, Subgrid};
 #[cfg(feature = "mpi")]
 use tracing::{info, warn};
 
-#[cfg(feature = "mpi")]
-use crate::{CellComplex, homology::full_reduce_sequential};
 use crate::{
     CellMatch, Chain, Cube, CubicalComplex, Grader, MorseMatching, Orthant, Ring, TopCubeGrader,
     parallel::map::ParallelMap,
@@ -413,30 +411,6 @@ where
 
     fn include_cell(&self, cell: u32) -> Self::UpperCell {
         self.critical_cells[cell as usize].clone()
-    }
-
-    /// Only root performs the sequential coreduction rounds. Non-root
-    /// processes skip the work entirely; results are synchronized during
-    /// subsequent wavefront flow operations.
-    #[cfg(feature = "mpi")]
-    fn full_reduce<PM>(
-        &self,
-        factory: impl Fn(CellComplex<Self::Ring>) -> PM,
-    ) -> (Vec<PM>, CellComplex<Self::Ring>)
-    where
-        PM: MorseMatching<
-                UpperCell = u32,
-                Ring = Self::Ring,
-                UpperComplex = CellComplex<Self::Ring>,
-            >,
-    {
-        let morse_complex = self.construct_morse_complex();
-
-        if self.config.backend.is_root() {
-            full_reduce_sequential(factory, morse_complex)
-        } else {
-            (Vec::new(), morse_complex)
-        }
     }
 
     fn lower(&self, chain: impl IntoIterator<Item = (Cube, R)>) -> Chain<u32, R> {

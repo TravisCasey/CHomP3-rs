@@ -501,6 +501,26 @@ where
         self.matches[cell].clone()
     }
 
+    fn boundary_and_coboundary(&self) -> (Vec<Chain<u32, C::Ring>>, Vec<Chain<u32, C::Ring>>) {
+        let critical_cells = self.critical_cells();
+
+        let mut boundaries = Vec::with_capacity(critical_cells.len());
+        for cell in critical_cells {
+            boundaries.push(self.lower(self.complex.cell_boundary(cell)));
+        }
+
+        // Coboundaries are the transpose of the boundary matrix
+        let mut coboundaries: Vec<Chain<u32, C::Ring>> =
+            (0..critical_cells.len()).map(|_| Chain::new()).collect();
+        for (cell, boundary) in boundaries.iter().enumerate() {
+            for (bd_cell, coef) in boundary {
+                *coboundaries[*bd_cell as usize].coefficient_mut(&(cell as u32)) = coef.clone();
+            }
+        }
+
+        (boundaries, coboundaries)
+    }
+
     fn lower(&self, chain: impl IntoIterator<Item = (C::Cell, C::Ring)>) -> Chain<u32, C::Ring> {
         let mut result = Chain::new();
         for (cell, coef) in chain {
