@@ -12,12 +12,12 @@
 //! [`TopCubicalMatching`](super::TopCubicalMatching) which exploits the grid
 //! structure for better performance.
 
-use std::{collections::HashMap, mem::take};
+use std::{cell::RefCell, collections::HashMap, mem::take};
 
 use tracing::{debug, info, trace};
 
 use crate::{
-    CellMatch, Complex, MorseMatching, Ring, homology::linked_list::LinkedList,
+    CellMatch, Chain, Complex, MorseMatching, Ring, homology::linked_list::LinkedList,
     logging::ProgressTracker,
 };
 
@@ -95,6 +95,7 @@ use crate::{
                        std::hash::Hash, C::Ring: serde::de::DeserializeOwned"
     ))
 )]
+#[allow(clippy::type_complexity)]
 pub struct CoreductionMatching<C>
 where
     C: Complex,
@@ -103,6 +104,10 @@ where
     critical_cells: Vec<C::Cell>,
     projection: HashMap<C::Cell, u32>,
     matches: HashMap<C::Cell, CellMatch<C::Cell, C::Ring>>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    lower_cache: RefCell<HashMap<C::Cell, Chain<u32, C::Ring>>>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    colower_cache: RefCell<HashMap<C::Cell, Chain<u32, C::Ring>>>,
 }
 
 impl<C> CoreductionMatching<C>
@@ -126,7 +131,186 @@ where
             critical_cells,
             projection,
             matches,
+            lower_cache: RefCell::new(HashMap::new()),
+            colower_cache: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Compute or retrieve the cached image of `cell` under the `lower` chain map.
+    /// Uses iterative DFS to resolve queen dependencies without deep recursion.
+    fn lower_cell_cached(&self, cell: &C::Cell) -> Chain<u32, C::Ring> {
+        match self.match_cell(cell) {
+            CellMatch::Ace { .. } => {
+                return Chain::from(
+                    self.project_cell(cell)
+                        .expect("critical cell not in projection map"),
+                );
+            },
+            CellMatch::King { .. } => return Chain::new(),
+            CellMatch::Queen { .. } => {},
+        }
+
+        if let Some(cached) = self.lower_cache.borrow().get(cell) {
+            return cached.clone();
+        }
+
+        // Iterative DFS: only queens go on the stack and in the cache
+        let mut stack: Vec<C::Cell> = vec![cell.clone()];
+
+        while let Some(current) = stack.last() {
+            let current = current.clone();
+            if self.lower_cache.borrow().contains_key(&current) {
+                stack.pop();
+                continue;
+            }
+
+            let CellMatch::Queen {
+                king, incidence, ..
+            } = self.match_cell(&current)
+            else {
+                unreachable!("non-queen on the DFS stack");
+            };
+
+            let boundary = self.complex.cell_boundary(&king);
+
+            // Check if all queen dependencies are cached (skip self)
+            let mut all_cached = true;
+            for (face, _) in &boundary {
+                if *face == current {
+                    continue;
+                }
+                if let CellMatch::Queen { .. } = self.match_cell(face)
+                    && !self.lower_cache.borrow().contains_key(face)
+                {
+                    stack.push(face.clone());
+                    all_cached = false;
+                }
+            }
+
+            if all_cached {
+                // lower(q) = -(1/incidence) * sum_{f != q} coef_f * lower(f)
+                let inv = incidence.invert().expect("non-invertible incidence");
+                let mut result = Chain::new();
+                let cache = self.lower_cache.borrow();
+                for (face, coef) in &boundary {
+                    if *face == current {
+                        continue;
+                    }
+                    match self.match_cell(face) {
+                        CellMatch::King { .. } => {},
+                        CellMatch::Ace { .. } => {
+                            let idx = self
+                                .project_cell(face)
+                                .expect("critical cell not in projection map");
+                            result.insert_or_add(idx, -(inv.clone()) * coef.clone());
+                        },
+                        CellMatch::Queen { .. } => {
+                            let face_lower = &cache[face];
+                            for (morse_cell, face_coef) in face_lower {
+                                result.insert_or_add(
+                                    *morse_cell,
+                                    -(inv.clone()) * coef.clone() * face_coef.clone(),
+                                );
+                            }
+                        },
+                    }
+                }
+                drop(cache);
+                self.lower_cache.borrow_mut().insert(current, result);
+                stack.pop();
+            }
+        }
+
+        self.lower_cache.borrow().get(cell).unwrap().clone()
+    }
+
+    /// Dual of [`lower_cell_cached`](Self::lower_cell_cached) via coboundaries.
+    /// Caches king cells; queens map to zero, aces to unit cochains.
+    fn colower_cell_cached(&self, cell: &C::Cell) -> Chain<u32, C::Ring> {
+        // Dispatch trivial cases inline
+        match self.match_cell(cell) {
+            CellMatch::Ace { .. } => {
+                return Chain::from(
+                    self.project_cell(cell)
+                        .expect("critical cell not in projection map"),
+                );
+            },
+            CellMatch::Queen { .. } => return Chain::new(),
+            CellMatch::King { .. } => {},
+        }
+
+        if let Some(cached) = self.colower_cache.borrow().get(cell) {
+            return cached.clone();
+        }
+
+        // Iterative DFS: only kings go on the stack and in the cache
+        let mut stack: Vec<C::Cell> = vec![cell.clone()];
+
+        while let Some(current) = stack.last() {
+            let current = current.clone();
+            if self.colower_cache.borrow().contains_key(&current) {
+                stack.pop();
+                continue;
+            }
+
+            let CellMatch::King {
+                queen, incidence, ..
+            } = self.match_cell(&current)
+            else {
+                unreachable!("non-king on the DFS stack");
+            };
+
+            let coboundary = self.complex.cell_coboundary(&queen);
+
+            // Check if all king dependencies are cached (skip self)
+            let mut all_cached = true;
+            for (coface, _) in &coboundary {
+                if *coface == current {
+                    continue;
+                }
+                if let CellMatch::King { .. } = self.match_cell(coface)
+                    && !self.colower_cache.borrow().contains_key(coface)
+                {
+                    stack.push(coface.clone());
+                    all_cached = false;
+                }
+            }
+
+            if all_cached {
+                // colower(k) = -(1/incidence) * sum_{f != k} coef_f * colower(f)
+                let inv = incidence.invert().expect("non-invertible incidence");
+                let mut result = Chain::new();
+                let cache = self.colower_cache.borrow();
+                for (coface, coef) in &coboundary {
+                    if *coface == current {
+                        continue;
+                    }
+                    match self.match_cell(coface) {
+                        CellMatch::Queen { .. } => {},
+                        CellMatch::Ace { .. } => {
+                            let idx = self
+                                .project_cell(coface)
+                                .expect("critical cell not in projection map");
+                            result.insert_or_add(idx, -(inv.clone()) * coef.clone());
+                        },
+                        CellMatch::King { .. } => {
+                            let coface_colower = &cache[coface];
+                            for (morse_cell, coface_coef) in coface_colower {
+                                result.insert_or_add(
+                                    *morse_cell,
+                                    -(inv.clone()) * coef.clone() * coface_coef.clone(),
+                                );
+                            }
+                        },
+                    }
+                }
+                drop(cache);
+                self.colower_cache.borrow_mut().insert(current, result);
+                stack.pop();
+            }
+        }
+
+        self.colower_cache.borrow().get(cell).unwrap().clone()
     }
 }
 
@@ -160,6 +344,37 @@ where
 
     fn match_cell(&self, cell: &Self::UpperCell) -> CellMatch<Self::UpperCell, Self::Ring> {
         self.matches[cell].clone()
+    }
+
+    fn lower(&self, chain: impl IntoIterator<Item = (C::Cell, C::Ring)>) -> Chain<u32, C::Ring> {
+        let mut result = Chain::new();
+        for (cell, coef) in chain {
+            if coef == C::Ring::zero() {
+                continue;
+            }
+            let lowered_cell = self.lower_cell_cached(&cell);
+            for (morse_cell, lowered_coef) in &lowered_cell {
+                result.insert_or_add(*morse_cell, coef.clone() * lowered_coef.clone());
+            }
+        }
+        result
+    }
+
+    fn colower(
+        &self,
+        cochain: impl IntoIterator<Item = (C::Cell, C::Ring)>,
+    ) -> Chain<u32, C::Ring> {
+        let mut result = Chain::new();
+        for (cell, coef) in cochain {
+            if coef == C::Ring::zero() {
+                continue;
+            }
+            let colowered_cell = self.colower_cell_cached(&cell);
+            for (morse_cell, colowered_coef) in &colowered_cell {
+                result.insert_or_add(*morse_cell, coef.clone() * colowered_coef.clone());
+            }
+        }
+        result
     }
 }
 
@@ -920,6 +1135,19 @@ mod tests {
                 colowered, colowered_capped,
                 "colower_capped != colower at max_grade=u32::MAX"
             );
+        }
+    }
+
+    #[test]
+    fn lower_cache_reuse() {
+        let matching = CoreductionMatching::new(circle_complex());
+        let complex = matching.upper_complex();
+
+        for cell in complex.iter() {
+            let chain: Chain<u32, Cyclic<5>> = Chain::from(cell);
+            let first = matching.lower(chain.clone());
+            let second = matching.lower(chain);
+            assert_eq!(first, second, "cached lower differs for cell {cell}");
         }
     }
 
