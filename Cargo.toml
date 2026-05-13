@@ -48,6 +48,9 @@ rand_chacha = "0.10"
 rand_distr = "0.6"
 serde_test = "1.0.177"
 
+[patch.crates-io]
+mpi-sys = { git = "https://github.com/TravisCasey/rsmpi", branch = "bump_bindgen" }
+
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
@@ -56,6 +59,7 @@ cast_possible_truncation = "allow"
 cast_possible_wrap = "allow"
 cast_precision_loss = "allow"
 cast_sign_loss = "allow"
+duration_suboptimal_units = "allow"
 len_without_is_empty = "allow"
 unreadable_literal = "allow"
 
